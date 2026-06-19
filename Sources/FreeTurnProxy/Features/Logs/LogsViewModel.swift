@@ -1,5 +1,5 @@
 import Foundation
-import Mobile
+import Ios
 
 @MainActor
 final class LogsViewModel: ObservableObject {
@@ -19,7 +19,7 @@ final class LogsViewModel: ObservableObject {
     }
 
     func clear() {
-        MobileClearLogs()
+        IosClearLogs()
         logs = ""
     }
 
@@ -38,7 +38,7 @@ final class LogsViewModel: ObservableObject {
     }
 
     private func refresh() {
-        let new = MobileGetLogs()
+        let new = IosGetLogs()
         if new != logs { logs = new }
     }
 }

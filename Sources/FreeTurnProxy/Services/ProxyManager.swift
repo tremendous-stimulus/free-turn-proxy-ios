@@ -1,5 +1,5 @@
 import Foundation
-import Mobile
+import Ios
 
 final class ProxyManager: ObservableObject {
     static let shared = ProxyManager()
@@ -41,14 +41,14 @@ final class ProxyManager: ObservableObject {
         guard let config else { throw AppError.noConfig }
         try audio.start()
         var startError: NSError?
-        MobileStart(config.link, config.peer, config.dns ?? "", config.listen ?? "127.0.0.1:9000", config.transport, config.obfKey, &startError)
+        IosStart(config.link, config.peer, config.dns ?? "", config.listen ?? "127.0.0.1:9000", config.transport, config.obfKey, &startError)
         if let startError { throw startError }
         isRunning = true
         startPolling()
     }
 
     func stop() {
-        MobileStop()
+        IosStop()
         audio.stop()
         isRunning = false
         state = "idle"
@@ -63,7 +63,7 @@ final class ProxyManager: ObservableObject {
             guard let self else { return }
             // Единый консистентный срез: стадия подключения + статистика в одном
             // вызове. isRunning выводим из state, отдельного флага в Go больше нет.
-            let snap = MobileGetState()
+            let snap = IosGetState()
             DispatchQueue.main.async {
                 let st = snap?.state ?? "idle"
                 self.state = st
