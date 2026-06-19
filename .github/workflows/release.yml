@@ -1,0 +1,110 @@
+name: Release IPA
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия (например 1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install tools
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          brew install xcodegen jq
+
+      - name: gomobile init
+        run: gomobile init
+
+      - name: Build framework
+        run: make framework GO_REPO=https://github.com/tremendous-stimulus/free-turn-proxy GO_REF=master
+
+      - name: Generate Xcode project
+        run: make project
+
+      - name: Set app version from tag
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" Sources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" Sources/Info.plist
+
+      - name: Build unsigned app
+        run: |
+          xcodebuild -scheme FreeTurnProxy -configuration Release -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Package IPA
+        run: |
+          APP="build/Build/Products/Release-iphoneos/FreeTurnProxy.app"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry FreeTurnProxy.ipa Payload
+          rm -rf Payload
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          files: FreeTurnProxy.ipa
+          generate_release_notes: true
+
+      - name: Update SideStore source
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          SIZE=$(stat -f%z FreeTurnProxy.ipa)
+          DATE=$(date -u +%Y-%m-%d)
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${V}/FreeTurnProxy.ipa"
+          tmp=$(mktemp)
+          jq --arg v "$V" --arg d "$DATE" --arg u "$URL" --argjson s "$SIZE" '
+            .apps[0].version = $v
+            | .apps[0].versionDate = $d
+            | .apps[0].downloadURL = $u
+            | .apps[0].size = $s
+            | .apps[0].versions = ([{version:$v, date:$d, localizedDescription:"Релиз \($v).", downloadURL:$u, size:$s, minOSVersion:"16.0"}]
+                + ((.apps[0].versions // []) | map(select(.version != $v))))
+          ' apps.json > "$tmp"
+          mv "$tmp" apps.json
+
+      - name: Commit updated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps.json
+          if git diff --cached --quiet; then
+            echo "источник не изменился"
+            exit 0
+          fi
+          git commit -m "chore: обновить SideStore-источник до ${{ steps.ver.outputs.version }}"
+          git push origin HEAD:main

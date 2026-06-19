@@ -2,6 +2,19 @@
 
 iOS-клиент [free-turn-proxy](https://github.com/tremendous-stimulus/free-turn-proxy): поднимает на устройстве локальный прокси, через который AmneziaWG/WireGuard тоннелируется в TURN-серверы VK под видом медиатрафика видеозвонка. SwiftUI, iOS 16+.
 
+## Установка через SideStore
+
+1. Установи [SideStore](https://sidestore.io) на устройство.
+2. В SideStore открой **Sources → +** и вставь ссылку на источник:
+
+   ```
+   https://raw.githubusercontent.com/tremendous-stimulus/free-turn-proxy-ios/main/apps.json
+   ```
+
+3. Открой источник «Free Turn» и нажми **Install** у приложения.
+
+Каждый новый git-тег вида `1.0.0` автоматически собирает `.ipa`, публикует GitHub Release и обновляет источник — SideStore подтянет обновление.
+
 ## Требования
 
 - Xcode 15+
