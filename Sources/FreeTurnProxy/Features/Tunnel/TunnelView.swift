@@ -73,11 +73,6 @@ struct TunnelView: View {
                 editorTarget = EditorTarget(initial: cfg, editingID: nil)
                 store.pendingImport = nil
             }
-            .onChange(of: store.importError) { msg in
-                guard let msg else { return }
-                vm.errorText = msg
-                store.importError = nil
-            }
             .onAppear {
                 // Файл могли открыть до появления вью (холодный старт).
                 if let cfg = store.pendingImport {

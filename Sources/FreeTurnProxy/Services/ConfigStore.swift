@@ -18,7 +18,6 @@ final class ConfigStore: ObservableObject {
 
     // Импорт открытого .freeturn — редактор на вкладке «Туннель» подхватит.
     @Published var pendingImport: SavedConfig?
-    @Published var importError: String?
 
     private let d = UserDefaults.standard
     private let configsKey = "savedConfigs.v1"
@@ -81,12 +80,11 @@ final class ConfigStore: ObservableObject {
     // MARK: – Импорт / экспорт (.freeturn)
 
     // Открыли .freeturn через приложение — парсим тем же методом и отдаём
-    // редактору (через pendingImport), либо показываем ошибку, если файл сломан.
+    // редактору (через pendingImport). Если файл не наш (например, открыли
+    // приложение через SideStore) — молча игнорируем, без алерта.
     func receiveFile(_ url: URL) {
-        do {
-            pendingImport = try ConfigCodec.parse(contentsOf: url)
-        } catch {
-            importError = error.localizedDescription
+        if let cfg = try? ConfigCodec.parse(contentsOf: url) {
+            pendingImport = cfg
         }
     }
 
