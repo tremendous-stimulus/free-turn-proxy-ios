@@ -6,10 +6,9 @@ import Foundation
 // то, что в белом списке (включая VK), остаётся напрямую.
 enum AllowedIPsBuilder {
     // Белый список CIDR РФ (доступен при веерных отключениях мобильного
-    // интернета). raw.githubusercontent в РФ заблокирован, поэтому тянем через
-    // зеркало Яндекс-переводчика — оно отдаёт HTML, CIDR достаём регуляркой.
+    // интернета). Тянем напрямую из источника — CIDR достаём регуляркой.
     private static let whitelistURL = URL(string:
-        "https://translated.turbopages.org/proxy_u/de-de.ru.c2348d12-6a347056-ce9fe8a6-74722d776562/https/raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/main/cidrwhitelist.txt"
+        "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/main/cidrwhitelist.txt"
     )!
 
     // Локальные/служебные диапазоны — всегда мимо туннеля. 127/8 критичен:
