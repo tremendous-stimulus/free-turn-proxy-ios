@@ -83,7 +83,7 @@ jobs:
         with:
           tag_name: ${{ steps.ver.outputs.version }}
           files: FreeTurnProxy.ipa
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
 
       - name: Update SideStore source
         run: |
