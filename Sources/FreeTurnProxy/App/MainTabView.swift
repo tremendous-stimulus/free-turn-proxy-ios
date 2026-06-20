@@ -11,7 +11,7 @@ struct MainTabView: View {
                 .tag(0)
 
             NavigationStack {
-                ConfigView()
+                ConfigView(isSelected: tab == 1)
             }
             .tabItem { Label("Конфиг VPN", systemImage: "network") }
             .tag(1)

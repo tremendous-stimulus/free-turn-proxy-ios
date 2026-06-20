@@ -2,11 +2,23 @@ import SwiftUI
 import PhotosUI
 
 struct ConfigView: View {
+    let isSelected: Bool
     @StateObject private var vm = ConfigViewModel()
     @StateObject private var scanner = QRScanner()
     @Environment(\.scenePhase) private var scenePhase
     @State private var photosItem: PhotosPickerItem?
     @State private var showFilePicker = false
+
+    // Камера должна работать ровно когда вкладка выбрана, сцена активна и мы не
+    // вводим имя. Без проверки isSelected невидимая вкладка в TabView запускала
+    // камеру при возврате из фона (индикатор камеры горел на других вкладках).
+    private var shouldScan: Bool {
+        isSelected && scenePhase == .active && !vm.showNaming
+    }
+
+    private func syncScanner() {
+        if shouldScan { scanner.start() } else { scanner.stop() }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,22 +29,16 @@ struct ConfigView: View {
         }
         .navigationTitle("Конфиг VPN")
         .navigationBarTitleDisplayMode(.large)
-        .onAppear { scanner.start() }
+        .onAppear { syncScanner() }
         .onDisappear { scanner.stop() }
-        .onChange(of: scenePhase) { phase in
-            // Сессия останавливается системой в фоне (напр. при уходе в AWG);
-            // оживляем превью при возврате, если не показываем sheet.
-            if phase == .active && !vm.showNaming { scanner.start() }
-        }
+        // Единый драйвер камеры: реагируем на смену вкладки, фон/возврат и ввод
+        // имени. Замена прежних разрозненных start/stop, из-за которых камера
+        // оживала на невидимой вкладке после сворачивания приложения.
+        .onChange(of: shouldScan) { _ in syncScanner() }
         .onChange(of: scanner.scannedCode) { code in
             guard let code else { return }
             scanner.scannedCode = nil
             vm.stage(rawConfig: code, defaultName: "tunnel")
-        }
-        .onChange(of: vm.showNaming) { naming in
-            // Замораживаем камеру, пока вводим название — иначе тот же QR
-            // пересканируется за открытым sheet.
-            if naming { scanner.stop() }
         }
         .onChange(of: photosItem) { item in
             guard let item else { return }
@@ -45,7 +51,7 @@ struct ConfigView: View {
             allowsMultipleSelection: false,
             onCompletion: vm.handleImport
         )
-        .sheet(isPresented: $vm.showNaming, onDismiss: { scanner.start(); vm.resetExport() }) {
+        .sheet(isPresented: $vm.showNaming, onDismiss: { vm.resetExport() }) {
             ConfigSheet(vm: vm)
         }
     }
