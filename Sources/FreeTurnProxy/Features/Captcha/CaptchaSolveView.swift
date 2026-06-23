@@ -2,12 +2,13 @@ import SwiftUI
 import WebKit
 
 // Экран ручного решения captcha — прозрачный WebView на весь экран поверх
-// затемнённого приложения. Фон VK-страницы гасим CSS, остаётся только сам
-// виджет. Закрытие детектим внутри страницы (JS): тап по любому месту вне блока
-// captcha или по крестику на блоке шлёт сообщение captchaClose. WebView на весь
-// экран обязателен — иначе тапы в верхней части некуда ловить. При успехе Go
-// закрывает оверлей сам (hide). Закрыли не решив — вернуть кнопкой «Показать
-// капчу».
+// затемнённого приложения. Фон VK-страницы гасим CSS, остаётся только виджет.
+// Закрытие детектим внутри страницы (JS): тап вне блока captcha или по крестику
+// шлёт captchaClose.
+//
+// DEBUG-захват: страница также шлёт полный outerHTML (captchaDOM) и описание
+// тапнутого элемента (captchaTap) — Swift пишет это в Documents (видно в Files
+// app), чтобы выгрузить живой DOM с реального устройства и подогнать селекторы.
 struct CaptchaSolveView: View {
     let url: URL
     let onClose: () -> Void
@@ -28,22 +29,32 @@ private struct CaptchaWebView: UIViewRepresentable {
     let url: URL
     let onClose: () -> Void
 
-    private static let closeMessage = "captchaClose"
+    private static let mClose = "captchaClose"
+    private static let mDOM = "captchaDOM"
+    private static let mTap = "captchaTap"
 
-    // Гасим фон страницы и ловим закрытие: тап вне блока captcha или по крестику.
     private static let injectedJS = """
     (function(){
       var s=document.createElement('style');
       s.innerHTML='html,body{background:transparent !important;background-color:transparent !important;}';
       document.documentElement.appendChild(s);
-      function close(){ try{ window.webkit.messageHandlers.\(closeMessage).postMessage(1);}catch(e){} }
-      function isClose(el){ return el.closest && el.closest('[class*="close" i],[aria-label*="close" i],[aria-label*="закры" i]'); }
-      function inCaptcha(el){ return el.closest && el.closest('iframe,canvas,button,form,[class*="captcha" i],[id*="captcha" i],[class*="vkc" i],[class*="slider" i],[class*="checkbox" i]'); }
+
+      function send(name,obj){ try{ window.webkit.messageHandlers[name].postMessage(obj);}catch(e){} }
+      function desc(el){ if(!el||!el.tagName) return String(el);
+        var c=(el.className&&el.className.toString)?el.className.toString().trim():'';
+        return el.tagName.toLowerCase()+(el.id?('#'+el.id):'')+(c?('.'+c.split(/\\s+/).join('.')):''); }
+      function path(el){ var a=[],n=0; while(el&&n<14){ a.push(desc(el)); el=el.parentElement; n++; } return a; }
+
+      // Полный DOM после рендера виджета.
+      setTimeout(function(){ send('\(mDOM)', document.documentElement.outerHTML); }, 1500);
+
       document.addEventListener('click', function(e){
         var t=e.target;
-        if(!t) return;
-        if(isClose(t)){ close(); return; }
-        if(!inCaptcha(t)){ close(); return; }
+        send('\(mTap)', JSON.stringify({target: desc(t), path: path(t)}));
+        if(t && t.closest){
+          if(t.closest('[class*="close" i],[aria-label*="close" i],[aria-label*="закры" i]')){ send('\(mClose)',1); return; }
+          if(!t.closest('iframe,canvas,button,form,[class*="captcha" i],[id*="captcha" i],[class*="vkc" i],[class*="slider" i],[class*="checkbox" i]')){ send('\(mClose)',1); return; }
+        }
       }, true);
     })();
     """
@@ -54,13 +65,16 @@ private struct CaptchaWebView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         let script = WKUserScript(source: Self.injectedJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
         config.userContentController.addUserScript(script)
-        config.userContentController.add(context.coordinator, name: Self.closeMessage)
+        for name in [Self.mClose, Self.mDOM, Self.mTap] {
+            config.userContentController.add(context.coordinator, name: name)
+        }
 
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
         wv.isOpaque = false
         wv.backgroundColor = .clear
         wv.scrollView.backgroundColor = .clear
+        if #available(iOS 16.4, *) { wv.isInspectable = true }
         wv.load(URLRequest(url: url))
         return wv
     }
@@ -68,7 +82,8 @@ private struct CaptchaWebView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
-        uiView.configuration.userContentController.removeScriptMessageHandler(forName: closeMessage)
+        let ucc = uiView.configuration.userContentController
+        for name in [mClose, mDOM, mTap] { ucc.removeScriptMessageHandler(forName: name) }
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
@@ -84,11 +99,18 @@ private struct CaptchaWebView: UIViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
-            DispatchQueue.main.async { self.onClose() }
+            switch message.name {
+            case CaptchaWebView.mClose:
+                DispatchQueue.main.async { self.onClose() }
+            case CaptchaWebView.mDOM:
+                CaptchaDebug.writeDOM(String(describing: message.body))
+            case CaptchaWebView.mTap:
+                CaptchaDebug.appendTap(String(describing: message.body))
+            default:
+                break
+            }
         }
 
-        // Локальный прокси мог ещё не подняться к моменту первого запроса —
-        // ретраим загрузку с короткой паузой несколько раз.
         func webView(_ webView: WKWebView,
                      didFailProvisionalNavigation navigation: WKNavigation!,
                      withError error: Error) {
@@ -108,6 +130,33 @@ private struct CaptchaWebView: UIViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak webView] in
                 webView?.load(URLRequest(url: url))
             }
+        }
+    }
+}
+
+// DEBUG: пишем живой DOM/тапы captcha в Documents (видно в Files app) — чтобы
+// выгрузить с реального устройства. Временное, убрать после подгонки селекторов.
+private enum CaptchaDebug {
+    private static var dir: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+
+    static func writeDOM(_ html: String) {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let header = "<!-- captcha DOM @ \(stamp) -->\n"
+        try? (header + html).write(to: dir.appendingPathComponent("captcha-dom.html"),
+                                   atomically: true, encoding: .utf8)
+    }
+
+    static func appendTap(_ json: String) {
+        let line = ISO8601DateFormatter().string(from: Date()) + " " + json + "\n"
+        let url = dir.appendingPathComponent("captcha-taps.txt")
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile()
+            h.write(Data(line.utf8))
+            try? h.close()
+        } else {
+            try? line.write(to: url, atomically: true, encoding: .utf8)
         }
     }
 }
