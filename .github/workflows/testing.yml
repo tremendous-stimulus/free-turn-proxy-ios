@@ -22,7 +22,9 @@ jobs:
       - name: Checkout testing
         uses: actions/checkout@v4
         with:
-          ref: testing
+          # Полная квалификация: есть одноимённый скользящий тег testing, короткое
+          # имя было бы неоднозначным (ветка vs тег).
+          ref: refs/heads/testing
           fetch-depth: 0
 
       - name: Resolve version
@@ -118,4 +120,5 @@ jobs:
             echo "источник не изменился"; exit 0
           fi
           git commit -m "chore: тестовый источник ${{ steps.ver.outputs.ssversion }} [skip ci]"
-          git push origin HEAD:testing
+          # refs/heads/ обязателен: тег testing делает короткое имя неоднозначным.
+          git push origin HEAD:refs/heads/testing
