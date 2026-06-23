@@ -1,34 +1,24 @@
 import SwiftUI
 import WebKit
 
-// Экран ручного решения captcha — оверлей поверх затемнённого приложения (не
-// full-screen sheet, иначе VK-виджет на своём белом фоне выглядел как попап на
-// попапе). WebView прозрачный + CSS гасит фон VK-страницы, так что над
-// приложением висит только сам виджет, прижатый к низу экрана. Тап по
-// затемнённому фону (видимая часть приложения) прячет оверлей; при успехе Go
-// закрывает его сам (hide -> isPresented=false). Вернуть окно, если закрыли не
-// решив, можно кнопкой «Открыть captcha».
+// Экран ручного решения captcha — прозрачный WebView на весь экран поверх
+// затемнённого приложения. Фон VK-страницы гасим CSS, остаётся только сам
+// виджет. Закрытие детектим внутри страницы (JS): тап по любому месту вне блока
+// captcha или по крестику на блоке шлёт сообщение captchaClose. WebView на весь
+// экран обязателен — иначе тапы в верхней части некуда ловить. При успехе Go
+// закрывает оверлей сам (hide). Закрыли не решив — вернуть кнопкой «Показать
+// капчу».
 struct CaptchaSolveView: View {
     let url: URL
     let onClose: () -> Void
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // Кнопка, а не onTapGesture: у Button хит-тестинг как у UIControl,
-            // без арбитража жестов с WebView/TabView (из-за которого одиночный
-            // тап «не регистрировался»).
-            Button(action: onClose) {
-                Color.black.opacity(0.5)
-            }
-            .buttonStyle(.plain)
-            .ignoresSafeArea()
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
 
-            // Прижато к низу: html-контейнер VK упирается в низ экрана, виджет
-            // выезжает снизу и остаётся внизу, а не висит посреди экрана.
-            CaptchaWebView(url: url)
-                .frame(maxWidth: .infinity)
-                .frame(height: 600)
-                .ignoresSafeArea(edges: .bottom)
+            CaptchaWebView(url: url, onClose: onClose)
+                .ignoresSafeArea()
         }
         .transition(.opacity)
     }
@@ -36,17 +26,35 @@ struct CaptchaSolveView: View {
 
 private struct CaptchaWebView: UIViewRepresentable {
     let url: URL
+    let onClose: () -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+    private static let closeMessage = "captchaClose"
+
+    // Гасим фон страницы и ловим закрытие: тап вне блока captcha или по крестику.
+    private static let injectedJS = """
+    (function(){
+      var s=document.createElement('style');
+      s.innerHTML='html,body{background:transparent !important;background-color:transparent !important;}';
+      document.documentElement.appendChild(s);
+      function close(){ try{ window.webkit.messageHandlers.\(closeMessage).postMessage(1);}catch(e){} }
+      function isClose(el){ return el.closest && el.closest('[class*="close" i],[aria-label*="close" i],[aria-label*="закры" i]'); }
+      function inCaptcha(el){ return el.closest && el.closest('iframe,canvas,button,form,[class*="captcha" i],[id*="captcha" i],[class*="vkc" i],[class*="slider" i],[class*="checkbox" i]'); }
+      document.addEventListener('click', function(e){
+        var t=e.target;
+        if(!t) return;
+        if(isClose(t)){ close(); return; }
+        if(!inCaptcha(t)){ close(); return; }
+      }, true);
+    })();
+    """
+
+    func makeCoordinator() -> Coordinator { Coordinator(url: url, onClose: onClose) }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        // Гасим фон VK-страницы, чтобы остался только сам виджет captcha поверх
-        // приложения. forMainFrameOnly:false — виджет может жить в iframe.
-        let css = "html,body,#root,#app,#app-root{background:transparent !important;background-color:transparent !important;}"
-        let js = "var s=document.createElement('style');s.innerHTML='\(css)';document.documentElement.appendChild(s);"
-        let script = WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        let script = WKUserScript(source: Self.injectedJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
         config.userContentController.addUserScript(script)
+        config.userContentController.add(context.coordinator, name: Self.closeMessage)
 
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
@@ -59,12 +67,25 @@ private struct CaptchaWebView: UIViewRepresentable {
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: closeMessage)
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         private let url: URL
+        private let onClose: () -> Void
         private var retries = 0
         private let maxRetries = 15
 
-        init(url: URL) { self.url = url }
+        init(url: URL, onClose: @escaping () -> Void) {
+            self.url = url
+            self.onClose = onClose
+        }
+
+        func userContentController(_ userContentController: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            DispatchQueue.main.async { self.onClose() }
+        }
 
         // Локальный прокси мог ещё не подняться к моменту первого запроса —
         // ретраим загрузку с короткой паузой несколько раз.
