@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainTabView: View {
     @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var captcha = CaptchaController.shared
     @State private var tab = 0
 
     var body: some View {
@@ -31,6 +32,9 @@ struct MainTabView: View {
         .onChange(of: store.pendingImport) { cfg in
             // Открыли .freeturn — показываем вкладку «Туннель», там откроется редактор.
             if cfg != nil { tab = 0 }
+        }
+        .sheet(item: $captcha.request) { req in
+            CaptchaSolveView(url: req.url)
         }
     }
 }
