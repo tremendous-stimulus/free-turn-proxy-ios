@@ -71,13 +71,10 @@ struct ConfigEditorView: View {
 
                             VStack(alignment: .leading, spacing: 4) {
                                 Toggle(isOn: $manualCaptcha) {
-                                    Label("Решать captcha вручную", systemImage: "checkmark.shield")
+                                    Label("Решать капчу вручную", systemImage: "checkmark.shield")
                                         .font(.caption.bold())
                                         .foregroundStyle(.secondary)
                                 }
-                                Text("VK-captcha всегда открывается в окне для ручного решения, минуя авто-решатель.")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
                             }
                         }
                         .padding(.top, 8)

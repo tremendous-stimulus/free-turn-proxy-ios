@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import UIKit
 import UserNotifications
 import Ios
@@ -31,7 +32,7 @@ final class CaptchaController: NSObject, ObservableObject {
         guard let url = URL(string: urlString) else { return }
         DispatchQueue.main.async {
             self.pendingURL = url
-            self.isPresented = true
+            withAnimation(.easeInOut(duration: 0.2)) { self.isPresented = true }
             // В фоне (интент/автопереподключение) пользователь не увидит попап —
             // шлём пуш, по тапу вернёмся и откроем captcha.
             if UIApplication.shared.applicationState != .active {
@@ -42,8 +43,10 @@ final class CaptchaController: NSObject, ObservableObject {
 
     func hide() {
         DispatchQueue.main.async {
-            self.pendingURL = nil
-            self.isPresented = false
+            withAnimation(.easeInOut(duration: 0.2)) {
+                self.pendingURL = nil
+                self.isPresented = false
+            }
             let c = UNUserNotificationCenter.current()
             c.removeDeliveredNotifications(withIdentifiers: [self.notifID])
             c.removePendingNotificationRequests(withIdentifiers: [self.notifID])
@@ -55,7 +58,7 @@ final class CaptchaController: NSObject, ObservableObject {
     func reopen() {
         DispatchQueue.main.async {
             guard self.pendingURL != nil else { return }
-            self.isPresented = true
+            withAnimation(.easeInOut(duration: 0.2)) { self.isPresented = true }
         }
     }
 

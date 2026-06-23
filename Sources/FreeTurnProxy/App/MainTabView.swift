@@ -38,9 +38,10 @@ struct MainTabView: View {
             }
 
             if captcha.isPresented, let url = captcha.pendingURL {
-                CaptchaSolveView(url: url) { captcha.isPresented = false }
+                CaptchaSolveView(url: url) {
+                    withAnimation(.easeInOut(duration: 0.2)) { captcha.isPresented = false }
+                }
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: captcha.isPresented)
     }
 }
