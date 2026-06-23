@@ -115,7 +115,7 @@ struct TunnelView: View {
         switch proxy.state {
         case "connected":  return .green
         case "connecting": return .yellow
-        case "captcha":    return .orange
+        case "captcha":    return .yellow
         case "error":      return .red
         default:           return Color.secondary.opacity(0.4)
         }
@@ -125,8 +125,8 @@ struct TunnelView: View {
         switch proxy.state {
         case "connecting": return "Подключение..."
         case "connected":  return "Подключено"
-        case "captcha":    return "Нужно решить captcha"
-        case "error":      return proxy.errorMessage.isEmpty ? "Неизвестная ошибка, проверьте логи" : "Ошибка: \(proxy.errorMessage)"
+        case "captcha":    return "Нужно решить капчу"
+        case "error":      return "Ошибка. Проверьте логи"
         default:           return "Не подключено"
         }
     }
@@ -240,26 +240,39 @@ struct TunnelView: View {
         VStack(spacing: 14) {
             statusSection
 
-            Button { vm.toggle() } label: {
-                Label(
-                    proxy.isRunning ? "Отключиться" : "Подключиться",
-                    systemImage: proxy.isRunning ? "stop.fill" : "play.fill"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(proxy.isRunning ? .red : .blue)
-            .disabled(!vm.canConnect && !proxy.isRunning)
-
             if captcha.pendingURL != nil {
-                Button { captcha.reopen() } label: {
-                    Label("Открыть captcha", systemImage: "checkmark.shield")
-                        .frame(maxWidth: .infinity)
+                // Во время капчи: «отключиться» ужимается в кружок-стоп, а
+                // «Показать капчу» занимает оставшееся место справа.
+                HStack(spacing: 12) {
+                    Button { vm.toggle() } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .frame(width: 50, height: 50)
+                            .background(Color.red, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button { captcha.reopen() } label: {
+                        Label("Показать капчу", systemImage: "checkmark.shield")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(.orange)
+                }
+            } else {
+                Button { vm.toggle() } label: {
+                    Label(
+                        proxy.isRunning ? "Отключиться" : "Подключиться",
+                        systemImage: proxy.isRunning ? "stop.fill" : "play.fill"
+                    )
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .tint(.orange)
+                .tint(proxy.isRunning ? .red : .blue)
+                .disabled(!vm.canConnect && !proxy.isRunning)
             }
 
             if proxy.state == "connected" {
