@@ -1,0 +1,121 @@
+name: Test IPA
+
+# Тестовый канал. Триггерится на push в ветку testing, собирает таргет
+# FreeTurnProxyTest (отдельный bundle id, имя «Free Turn Test»), кладёт .ipa в
+# один скользящий релиз с тегом testing и обновляет тестовый SideStore-источник
+# (apps.json на этой же ветке). main и прод-источник не затрагиваются.
+on:
+  push:
+    branches: [testing]
+    # Авто-коммит источника не должен ретриггерить сборку (плюс [skip ci] ниже).
+    paths-ignore:
+      - 'apps.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test-build:
+    runs-on: macos-26
+    steps:
+      - name: Checkout testing
+        uses: actions/checkout@v4
+        with:
+          ref: testing
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        run: |
+          BASE=1.2.0
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "ssversion=${BASE}-test.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install tools
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          brew install xcodegen jq
+
+      - name: gomobile init
+        run: gomobile init
+
+      # Фреймворк собираем из Go-ветки с captcha-мостом (master форка не трогаем).
+      - name: Build framework (captcha branch)
+        run: make framework GO_REPO=https://github.com/tremendous-stimulus/free-turn-proxy GO_REF=feat/manual-captcha
+
+      - name: Generate Xcode project
+        run: make project
+
+      - name: Set app version
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.ver.outputs.base }}" Sources/Info-Test.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" Sources/Info-Test.plist
+
+      - name: Build unsigned test app
+        run: |
+          xcodebuild -scheme FreeTurnProxyTest -configuration Release -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Package IPA
+        run: |
+          APP="build/Build/Products/Release-iphoneos/FreeTurnProxyTest.app"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry FreeTurnProxyTest.ipa Payload
+          rm -rf Payload
+
+      # Тег testing скользящий — пересоздаём, чтобы держать ровно одну сборку.
+      - name: Reset moving 'testing' release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete testing -y --cleanup-tag || true
+
+      - name: Create testing release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: testing
+          target_commitish: testing
+          name: "Тестовая сборка"
+          prerelease: true
+          files: FreeTurnProxyTest.ipa
+          body: "Тестовая сборка ${{ steps.ver.outputs.ssversion }} (ветка testing, отдельное приложение «Free Turn Test»). Не для прода."
+
+      - name: Update testing SideStore source
+        run: |
+          V="${{ steps.ver.outputs.ssversion }}"
+          SIZE=$(stat -f%z FreeTurnProxyTest.ipa)
+          DATE=$(date -u +%Y-%m-%d)
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/testing/FreeTurnProxyTest.ipa"
+          tmp=$(mktemp)
+          jq --arg v "$V" --arg d "$DATE" --arg u "$URL" --argjson s "$SIZE" '
+            .apps[0].version = $v
+            | .apps[0].versionDate = $d
+            | .apps[0].downloadURL = $u
+            | .apps[0].size = $s
+            | .apps[0].versions = [{version:$v, date:$d, localizedDescription:"Тестовая сборка \($v).", downloadURL:$u, size:$s, minOSVersion:"16.0"}]
+          ' apps.json > "$tmp"
+          mv "$tmp" apps.json
+
+      - name: Commit updated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps.json
+          if git diff --cached --quiet; then
+            echo "источник не изменился"; exit 0
+          fi
+          git commit -m "chore: тестовый источник ${{ steps.ver.outputs.ssversion }} [skip ci]"
+          git push origin HEAD:testing
