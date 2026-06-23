@@ -33,10 +33,11 @@ struct MainTabView: View {
             // Открыли .freeturn — показываем вкладку «Туннель», там откроется редактор.
             if cfg != nil { tab = 0 }
         }
-        .sheet(isPresented: $captcha.isPresented) {
-            if let url = captcha.pendingURL {
-                CaptchaSolveView(url: url)
+        .overlay {
+            if captcha.isPresented, let url = captcha.pendingURL {
+                CaptchaSolveView(url: url) { captcha.isPresented = false }
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: captcha.isPresented)
     }
 }

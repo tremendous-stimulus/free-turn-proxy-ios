@@ -1,25 +1,42 @@
 import SwiftUI
 import WebKit
 
-// Экран ручного решения captcha. Грузит локальный прокси VK-страницы; при
-// успешном решении Go закрывает sheet сам (hide -> request=nil). «Отмена»
-// просто прячет окно — Go-решатель добивается своего таймаута.
+// Экран ручного решения captcha — оверлей поверх затемнённого приложения (не
+// full-screen sheet, иначе VK-виджет на своём белом фоне выглядел как попап на
+// попапе). WebView прозрачный + CSS гасит фон VK-страницы, так что над
+// приложением висит только сам виджет. При успехе Go закрывает оверлей сам
+// (hide -> isPresented=false). Крестик просто прячет — Go-решатель добивается
+// своего таймаута, а вернуть окно можно кнопкой «Открыть captcha».
 struct CaptchaSolveView: View {
     let url: URL
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
 
     var body: some View {
-        NavigationStack {
-            CaptchaWebView(url: url)
-                .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("Captcha")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Отмена") { dismiss() }
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+
+            VStack(spacing: 10) {
+                HStack {
+                    Text("Captcha")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white.opacity(0.85))
                     }
                 }
+                .padding(.horizontal, 4)
+
+                CaptchaWebView(url: url)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 520)
+            }
+            .padding(20)
         }
+        .transition(.opacity)
     }
 }
 
@@ -29,8 +46,19 @@ private struct CaptchaWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(url: url) }
 
     func makeUIView(context: Context) -> WKWebView {
-        let wv = WKWebView()
+        let config = WKWebViewConfiguration()
+        // Гасим фон VK-страницы, чтобы остался только сам виджет captcha поверх
+        // приложения. forMainFrameOnly:false — виджет может жить в iframe.
+        let css = "html,body,#root,#app,#app-root{background:transparent !important;background-color:transparent !important;}"
+        let js = "var s=document.createElement('style');s.innerHTML='\(css)';document.documentElement.appendChild(s);"
+        let script = WKUserScript(source: js, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        config.userContentController.addUserScript(script)
+
+        let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
+        wv.isOpaque = false
+        wv.backgroundColor = .clear
+        wv.scrollView.backgroundColor = .clear
         wv.load(URLRequest(url: url))
         return wv
     }
