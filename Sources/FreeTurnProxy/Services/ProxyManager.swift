@@ -46,6 +46,7 @@ final class ProxyManager: ObservableObject {
     func start() throws {
         guard let config else { throw AppError.noConfig }
         try audio.start()
+        IosSetManualCaptcha(config.manualCaptcha)
         var startError: NSError?
         IosStart(config.link, config.peer, config.dns ?? "", config.listen ?? "127.0.0.1:9000", config.transport, config.obfKey, &startError)
         if let startError { throw startError }
@@ -93,6 +94,7 @@ final class ProxyManager: ObservableObject {
         // TIME_WAIT, поэтому хватает короткой паузы перед повторным bind.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, self.isRunning, let config = self.config else { return }
+            IosSetManualCaptcha(config.manualCaptcha)
             var err: NSError?
             IosStart(config.link, config.peer, config.dns ?? "", config.listen ?? "127.0.0.1:9000", config.transport, config.obfKey, &err)
             if err != nil, retry > 0 {

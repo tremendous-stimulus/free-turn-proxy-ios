@@ -17,6 +17,7 @@ struct ConfigEditorView: View {
     @State private var dns: String
     @State private var listen: String
     @State private var transport: String
+    @State private var manualCaptcha: Bool
 
     init(initial: SavedConfig?, isEditing: Bool, onSave: @escaping (SavedConfig) -> Void) {
         self.isEditing = isEditing
@@ -28,6 +29,7 @@ struct ConfigEditorView: View {
         _dns = State(initialValue: initial?.dns ?? "")
         _listen = State(initialValue: initial?.listen ?? "")
         _transport = State(initialValue: initial?.transport ?? "udp")
+        _manualCaptcha = State(initialValue: initial?.manualCaptcha ?? false)
     }
 
     var body: some View {
@@ -66,6 +68,17 @@ struct ConfigEditorView: View {
                             LabeledField(title: "Локальный адрес", icon: "antenna.radiowaves.left.and.right",
                                          placeholder: "127.0.0.1:9000 по умолчанию", text: $listen,
                                          keyboard: .asciiCapable, error: listenError)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Toggle(isOn: $manualCaptcha) {
+                                    Label("Решать captcha вручную", systemImage: "checkmark.shield")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("VK-captcha всегда открывается в окне для ручного решения, минуя авто-решатель.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         .padding(.top, 8)
                     } label: {
@@ -133,7 +146,8 @@ struct ConfigEditorView: View {
             obfKey: obfKey.trimmingCharacters(in: .whitespaces),
             dns: dns.trimmingCharacters(in: .whitespaces),
             listen: listen.trimmingCharacters(in: .whitespaces),
-            transport: transport
+            transport: transport,
+            manualCaptcha: manualCaptcha
         )
         onSave(c)
         dismiss()

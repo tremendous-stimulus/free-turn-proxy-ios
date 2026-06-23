@@ -43,6 +43,7 @@ enum TunnelController {
         )
         cfg.transport = c.transport
         cfg.obfKey = c.obfKey
+        cfg.manualCaptcha = c.manualCaptcha
         proxy.loadConfig(cfg, fileName: c.name)
         do {
             try proxy.start()

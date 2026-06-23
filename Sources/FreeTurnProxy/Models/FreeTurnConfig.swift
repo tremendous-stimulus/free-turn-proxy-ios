@@ -9,4 +9,5 @@ struct FreeTurnConfig {
     let listen: String?
     var transport: String = "tcp"
     var obfKey: String = ""
+    var manualCaptcha: Bool = false
 }
