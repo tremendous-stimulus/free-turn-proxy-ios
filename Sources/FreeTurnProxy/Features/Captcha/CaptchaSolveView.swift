@@ -14,10 +14,14 @@ struct CaptchaSolveView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color.black.opacity(0.5)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { onClose() }
+            // Кнопка, а не onTapGesture: у Button хит-тестинг как у UIControl,
+            // без арбитража жестов с WebView/TabView (из-за которого одиночный
+            // тап «не регистрировался»).
+            Button(action: onClose) {
+                Color.black.opacity(0.5)
+            }
+            .buttonStyle(.plain)
+            .ignoresSafeArea()
 
             // Прижато к низу: html-контейнер VK упирается в низ экрана, виджет
             // выезжает снизу и остаётся внизу, а не висит посреди экрана.
