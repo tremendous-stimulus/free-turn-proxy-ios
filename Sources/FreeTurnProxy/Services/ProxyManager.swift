@@ -127,7 +127,7 @@ final class ProxyManager: ObservableObject {
                 self.rxTotalBytes = snap?.rxTotal ?? 0
                 self.txRateBytesPerSec = snap?.txRate ?? 0
                 self.rxRateBytesPerSec = snap?.rxRate ?? 0
-                let active = (st == "connecting" || st == "connected")
+                let active = (st == "connecting" || st == "connected" || st == "captcha")
                 self.isRunning = active
                 if !active {
                     self.stopPolling()

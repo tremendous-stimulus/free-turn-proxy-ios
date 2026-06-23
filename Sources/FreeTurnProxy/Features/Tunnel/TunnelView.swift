@@ -4,6 +4,7 @@ struct TunnelView: View {
     @StateObject private var vm = TunnelViewModel()
     @ObservedObject private var proxy = ProxyManager.shared
     @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var captcha = CaptchaController.shared
     @State private var editorTarget: EditorTarget?
     @State private var pendingDelete: SavedConfig?
     @State private var showUndo = false
@@ -114,15 +115,17 @@ struct TunnelView: View {
         switch proxy.state {
         case "connected":  return .green
         case "connecting": return .yellow
+        case "captcha":    return .orange
         case "error":      return .red
         default:           return Color.secondary.opacity(0.4)
         }
     }
-    
+
     private var statusMessage: String {
         switch proxy.state {
         case "connecting": return "Подключение..."
         case "connected":  return "Подключено"
+        case "captcha":    return "Нужно решить captcha"
         case "error":      return proxy.errorMessage.isEmpty ? "Неизвестная ошибка, проверьте логи" : "Ошибка: \(proxy.errorMessage)"
         default:           return "Не подключено"
         }
@@ -248,6 +251,16 @@ struct TunnelView: View {
             .controlSize(.large)
             .tint(proxy.isRunning ? .red : .blue)
             .disabled(!vm.canConnect && !proxy.isRunning)
+
+            if captcha.pendingURL != nil {
+                Button { captcha.reopen() } label: {
+                    Label("Открыть captcha", systemImage: "checkmark.shield")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(.orange)
+            }
 
             if proxy.state == "connected" {
                 statsBlock

@@ -59,13 +59,18 @@ enum TunnelController {
 
     // Ждём пока state не станет "connected"; на "error" — бросаем ошибку.
     static func waitUntilConnected(timeout: TimeInterval = 60) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
+        var deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             let proxy = ProxyManager.shared
             if proxy.state == "connected" { return }
             if proxy.state == "error" {
                 throw TunnelError.connectFailed(
                     proxy.errorMessage.isEmpty ? "Ошибка подключения" : proxy.errorMessage)
+            }
+            // Пока пользователь решает captcha — не тратим бюджет ожидания, чтобы
+            // интент продолжал работать до подключения или ошибки.
+            if proxy.state == "captcha" {
+                deadline = Date().addingTimeInterval(timeout)
             }
             try await Task.sleep(nanoseconds: 300_000_000)
         }

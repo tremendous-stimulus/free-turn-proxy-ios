@@ -12,7 +12,7 @@ struct CaptchaSolveView: View {
         NavigationStack {
             CaptchaWebView(url: url)
                 .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("Подтвердите, что вы не робот")
+                .navigationTitle("Captcha")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
