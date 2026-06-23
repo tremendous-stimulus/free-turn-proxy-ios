@@ -5,6 +5,8 @@ struct FreeTurnProxyApp: App {
     init() {
         // Свежая установка — стираем токены, пережившие удаление приложения.
         Keychain.wipeSecretsOnFreshInstall()
+        // Регистрируем мост ручного решения captcha (Go -> WebView).
+        CaptchaBridge.register()
     }
 
     var body: some Scene {
