@@ -4,37 +4,27 @@ import WebKit
 // Экран ручного решения captcha — оверлей поверх затемнённого приложения (не
 // full-screen sheet, иначе VK-виджет на своём белом фоне выглядел как попап на
 // попапе). WebView прозрачный + CSS гасит фон VK-страницы, так что над
-// приложением висит только сам виджет. При успехе Go закрывает оверлей сам
-// (hide -> isPresented=false). Крестик просто прячет — Go-решатель добивается
-// своего таймаута, а вернуть окно можно кнопкой «Открыть captcha».
+// приложением висит только сам виджет, прижатый к низу экрана. Тап по
+// затемнённому фону (видимая часть приложения) прячет оверлей; при успехе Go
+// закрывает его сам (hide -> isPresented=false). Вернуть окно, если закрыли не
+// решив, можно кнопкой «Открыть captcha».
 struct CaptchaSolveView: View {
     let url: URL
     let onClose: () -> Void
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             Color.black.opacity(0.5)
                 .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { onClose() }
 
-            VStack(spacing: 10) {
-                HStack {
-                    Text("Captcha")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Spacer()
-                    Button(action: onClose) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white.opacity(0.85))
-                    }
-                }
-                .padding(.horizontal, 4)
-
-                CaptchaWebView(url: url)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 520)
-            }
-            .padding(20)
+            // Прижато к низу: html-контейнер VK упирается в низ экрана, виджет
+            // выезжает снизу и остаётся внизу, а не висит посреди экрана.
+            CaptchaWebView(url: url)
+                .frame(maxWidth: .infinity)
+                .frame(height: 600)
+                .ignoresSafeArea(edges: .bottom)
         }
         .transition(.opacity)
     }
