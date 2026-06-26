@@ -15,7 +15,8 @@ final class TunnelViewModel: ObservableObject {
     @Published var creatingCall = false
     @Published var showVKWebFallback = false
     // VK access-token. Персистится в Keychain (учётные данные), не в plist.
-    private var vkAuthToken: String? {
+    // internal (не private) — тесты устанавливают напрямую, минуя Keychain.
+    var vkAuthToken: String? {
         didSet { Keychain.set(vkAuthToken, for: vkTokenKey) }
     }
 

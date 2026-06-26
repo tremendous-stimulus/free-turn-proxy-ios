@@ -27,12 +27,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+          cache: false   # нет go.sum в корне — авто-кеш Go-модулей не нужен
 
       - name: Install tools
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          brew install xcodegen go-task
+          brew install xcodegen
 
       - name: Cache Mobile.xcframework
         id: cache-fw
@@ -60,18 +61,40 @@ jobs:
           echo "Picked simulator: $NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Run tests
+      - name: Boot simulator
+        run: |
+          UDID=$(xcrun simctl list devices available --json \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); \
+              found=[(v[0]['udid'],v[0]['name']) for k,v in d['devices'].items() if 'iOS' in k and v]; \
+              found.sort(key=lambda t: ('iPhone' not in t[1], t[1])); print(found[0][0])")
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+
+      - name: Run unit tests
         run: |
           set -o pipefail
           xcodebuild test \
             -scheme FreeTurnProxy \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
-            -resultBundlePath TestResults.xcresult \
+            -only-testing:FreeTurnProxyTests \
+            -resultBundlePath TestResults-unit.xcresult \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Upload test result bundle
+      - name: Run UI smoke tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme FreeTurnProxy \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -only-testing:FreeTurnProxyUITests \
+            -resultBundlePath TestResults-ui.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: TestResults.xcresult
+          path: |
+            TestResults-unit.xcresult
+            TestResults-ui.xcresult
