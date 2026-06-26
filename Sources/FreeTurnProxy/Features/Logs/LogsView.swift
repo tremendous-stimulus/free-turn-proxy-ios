@@ -3,6 +3,7 @@ import SwiftUI
 struct LogsView: View {
     @StateObject private var vm = LogsViewModel()
     @State private var shareURL: URL?
+    @State private var showSettings = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -33,6 +34,12 @@ struct LogsView: View {
                 } label: {
                     Image(systemName: "trash")
                 }
+
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
             }
         }
         .sheet(isPresented: .init(
@@ -40,6 +47,9 @@ struct LogsView: View {
             set: { if !$0 { shareURL = nil } }
         )) {
             if let url = shareURL { ShareSheet(items: [url]) }
+        }
+        .sheet(isPresented: $showSettings) {
+            LogsSettingsView()
         }
         .onAppear { vm.start() }
         .onDisappear { vm.stop() }

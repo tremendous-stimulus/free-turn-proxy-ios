@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct HelpView: View {
+    @Environment(\.isBannerVisible) private var isBannerVisible
     private let supportURL = URL(string: "https://t.me/freeturnproxy_ios_help_bot")!
 
     private let faq: [(q: String, a: String)] = [
@@ -58,10 +59,20 @@ struct HelpView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 24)
+
+                HStack(spacing: 6) {
+                    Text("Версия \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")")
+                    Text("·")
+                    Link("GitHub", destination: URL(string: "https://github.com/tremendous-stimulus/free-turn-proxy-ios")!)
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
             }
             .padding()
         }
         .navigationTitle("Помощь")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(isBannerVisible ? .inline : .large)
     }
 }

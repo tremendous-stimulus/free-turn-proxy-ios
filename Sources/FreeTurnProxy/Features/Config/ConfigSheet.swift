@@ -28,13 +28,30 @@ private struct NameStep: View {
         ScrollView {
             VStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("Название туннеля", systemImage: "character.cursor.ibeam")
+                    Label("Название конфигурации", systemImage: "character.cursor.ibeam")
                         .font(.caption.bold())
                         .foregroundStyle(.secondary)
-                    TextField("tunnel", text: $vm.tunnelName)
+                    TextField("Название", text: $vm.tunnelName)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .focused($focused)
+                    Text("Убедитесь, что название не конфликтует с другими конфигурациями, установленными в приложении VPN")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Label("Схема AllowedIPs", systemImage: "network.badge.shield.half.filled")
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    Picker("Схема AllowedIPs", selection: $vm.selectedScheme) {
+                        ForEach(AllowedIPsBuilder.Scheme.allCases) { scheme in
+                            Text(scheme.rawValue).tag(scheme)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
 
                 if let error {
@@ -66,7 +83,7 @@ private struct NameStep: View {
             .padding()
         }
         .scrollDismissesKeyboard(.interactively)
-        .navigationTitle("Новый туннель")
+        .navigationTitle("Новая конфигурация")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {

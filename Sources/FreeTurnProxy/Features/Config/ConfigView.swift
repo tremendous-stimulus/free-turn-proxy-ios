@@ -6,6 +6,7 @@ struct ConfigView: View {
     @StateObject private var vm = ConfigViewModel()
     @StateObject private var scanner = QRScanner()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.isBannerVisible) private var isBannerVisible
     @State private var photosItem: PhotosPickerItem?
     @State private var showFilePicker = false
 
@@ -28,7 +29,7 @@ struct ConfigView: View {
             bottomButtons.padding()
         }
         .navigationTitle("Конфиг VPN")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(isBannerVisible ? .inline : .large)
         .onAppear { syncScanner() }
         .onDisappear { scanner.stop() }
         // Единый драйвер камеры: реагируем на смену вкладки, фон/возврат и ввод
@@ -38,7 +39,7 @@ struct ConfigView: View {
         .onChange(of: scanner.scannedCode) { code in
             guard let code else { return }
             scanner.scannedCode = nil
-            vm.stage(rawConfig: code, defaultName: "tunnel")
+            vm.stage(rawConfig: code, defaultName: ConfigStore.shared.selected?.name ?? "tunnel")
         }
         .onChange(of: photosItem) { item in
             guard let item else { return }
