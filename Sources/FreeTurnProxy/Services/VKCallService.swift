@@ -14,14 +14,14 @@ enum VKCallError: LocalizedError {
     }
 }
 
-func vkCreateCall(token: String) async throws -> String {
+func vkCreateCall(token: String, session: URLSession = .shared) async throws -> String {
     var comps = URLComponents(string: "https://api.vk.com/method/calls.start")!
     comps.queryItems = [
         .init(name: "access_token", value: token),
         .init(name: "v", value: "5.131"),
     ]
     let data: Data
-    do { (data, _) = try await URLSession.shared.data(from: comps.url!) }
+    do { (data, _) = try await session.data(from: comps.url!) }
     catch { throw VKCallError.network(error) }
 
     struct Resp: Decodable {

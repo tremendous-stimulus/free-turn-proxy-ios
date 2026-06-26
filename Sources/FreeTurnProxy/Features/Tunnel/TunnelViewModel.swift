@@ -21,8 +21,10 @@ final class TunnelViewModel: ObservableObject {
 
     private let d = UserDefaults.standard
     private let vkTokenKey = Keychain.vkTokenAccount
+    private let session: URLSession
 
-    init() {
+    init(session: URLSession = .shared) {
+        self.session = session
         link = d.string(forKey: DefaultsKeys.manualLink) ?? ""
         vkAuthToken = Keychain.get(vkTokenKey)
     }
@@ -52,7 +54,7 @@ final class TunnelViewModel: ObservableObject {
         creatingCall = true
         defer { creatingCall = false }
         do {
-            link = try await vkCreateCall(token: token)
+            link = try await vkCreateCall(token: token, session: session)
         } catch {
             // Сбрасываем токен только когда VK сам сказал, что он невалиден
             // (error_code 5 — User authorization failed). Сетевые сбои и

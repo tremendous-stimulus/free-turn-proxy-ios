@@ -6,22 +6,28 @@ final class TunnelViewModelTests: XCTestCase {
 
     private static let vkAPI = "api.vk.com"
 
+    // URLSession с MockURLProtocol в protocolClasses — не зависит от registerClass.
+    private var mockSession: URLSession!
+
     override func setUp() {
         super.setUp()
-        MockURLProtocol.register()
+        mockSession = MockURLProtocol.makeSession()
         Keychain.remove(Keychain.vkTokenAccount)
     }
 
     override func tearDown() {
-        MockURLProtocol.unregister()
+        MockURLProtocol.reset()
+        mockSession = nil
         Keychain.remove(Keychain.vkTokenAccount)
         super.tearDown()
     }
 
+    private func vm() -> TunnelViewModel { TunnelViewModel(session: mockSession) }
+
     // MARK: – createCall без токена
 
     func test_createCall_noToken_showsVKWebFallback() async {
-        let vm = TunnelViewModel()
+        let vm = vm()
         await vm.createCall()
         XCTAssertTrue(vm.showVKWebFallback)
         XCTAssertNil(vm.errorText)
@@ -35,7 +41,7 @@ final class TunnelViewModelTests: XCTestCase {
                              with: .http(status: 200, body: Data(body.utf8)))
         Keychain.set("faketoken", for: Keychain.vkTokenAccount)
 
-        let vm = TunnelViewModel()
+        let vm = vm()
         await vm.createCall()
         XCTAssertEqual(vm.link, "https://vk.com/call/join/xyz")
         XCTAssertNil(vm.errorText)
@@ -47,7 +53,7 @@ final class TunnelViewModelTests: XCTestCase {
                              with: .http(status: 200, body: Data(body.utf8)))
         Keychain.set("expiredtoken", for: Keychain.vkTokenAccount)
 
-        let vm = TunnelViewModel()
+        let vm = vm()
         await vm.createCall()
         XCTAssertTrue(vm.showVKWebFallback)
         XCTAssertNil(Keychain.get(Keychain.vkTokenAccount))
@@ -58,7 +64,7 @@ final class TunnelViewModelTests: XCTestCase {
                              with: .error(URLError(.notConnectedToInternet)))
         Keychain.set("mytoken", for: Keychain.vkTokenAccount)
 
-        let vm = TunnelViewModel()
+        let vm = vm()
         await vm.createCall()
         XCTAssertNotNil(vm.errorText)
         XCTAssertFalse(vm.showVKWebFallback)

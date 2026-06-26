@@ -22,6 +22,14 @@ final class MockURLProtocol: URLProtocol {
 
     // MARK: – Контроль регистрации
 
+    // Надёжный способ: сессия создаётся с явным protocolClasses — не зависит от
+    // того, когда был вызван registerClass относительно инициализации URLSession.shared.
+    static func makeSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: config)
+    }
+
     static func register() {
         URLProtocol.registerClass(MockURLProtocol.self)
     }
