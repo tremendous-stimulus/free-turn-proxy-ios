@@ -58,3 +58,46 @@ targets:
       - framework: Frameworks/Mobile.xcframework
         embed: true
         codeSign: true
+
+  # Регресс-тесты (XCTest). Хост — основное приложение. Не подписываются
+  # (CODE_SIGNING_ALLOWED=NO) — гоняются на симуляторе.
+  FreeTurnProxyTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/FreeTurnProxyTests
+    dependencies:
+      - target: FreeTurnProxy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.freeturn.proxy.tests
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGNING_ALLOWED: "NO"
+
+schemes:
+  FreeTurnProxy:
+    build:
+      targets:
+        FreeTurnProxy: all
+        FreeTurnProxyTests: test
+    test:
+      targets:
+        - FreeTurnProxyTests
+      gatherCoverageData: true
+      coverageTargets:
+        - FreeTurnProxy
+    run:
+      config: Debug
+    archive:
+      config: Release
+
+  FreeTurnProxyTest:
+    build:
+      targets:
+        FreeTurnProxyTest: all
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -3,3 +3,5 @@ FreeTurnProxy.xcodeproj/
 .framework-src/
 .DS_Store
 .claude
+TestResults.xcresult/
+build/

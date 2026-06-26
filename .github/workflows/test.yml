@@ -1,0 +1,77 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - testing
+  pull_request:
+    branches:
+      - main
+      - testing
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install tools
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          brew install xcodegen go-task
+
+      - name: Cache Mobile.xcframework
+        id: cache-fw
+        uses: actions/cache@v4
+        with:
+          path: Frameworks/Mobile.xcframework
+          key: mobile-xcframework-v1.5.2
+
+      - name: Build framework
+        if: steps.cache-fw.outputs.cache-hit != 'true'
+        run: |
+          gomobile init
+          make framework
+
+      - name: Generate Xcode project
+        run: make project
+
+      - name: Pick simulator
+        id: sim
+        run: |
+          NAME=$(xcrun simctl list devices available --json \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); \
+              found=[v[0]['name'] for k,v in d['devices'].items() if 'iOS' in k and v]; \
+              print(sorted(found, key=lambda n: ('iPhone' not in n, n))[0])")
+          echo "Picked simulator: $NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme FreeTurnProxy \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload test result bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults.xcresult

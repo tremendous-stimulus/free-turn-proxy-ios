@@ -127,13 +127,13 @@ enum AllowedIPsBuilder {
 
     // MARK: - Parsing
 
-    private struct IPRange { var start: UInt32; var end: UInt32 }
+    struct IPRange: Equatable { var start: UInt32; var end: UInt32 }
 
     private static let cidrRegex = try! NSRegularExpression(
         pattern: #"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})"#
     )
 
-    private static func parseCIDRs(_ s: String) -> [IPRange] {
+    static func parseCIDRs(_ s: String) -> [IPRange] {
         let ns = s as NSString
         let matches = cidrRegex.matches(in: s, range: NSRange(location: 0, length: ns.length))
         var out: [IPRange] = []
@@ -150,7 +150,7 @@ enum AllowedIPsBuilder {
         return out
     }
 
-    private static func parseCIDR(_ cidr: String) -> IPRange? {
+    static func parseCIDR(_ cidr: String) -> IPRange? {
         let parts = cidr.split(separator: "/")
         guard parts.count == 2, let pfx = Int(parts[1]) else { return nil }
         let octs = parts[0].split(separator: ".").compactMap { Int($0) }
@@ -159,7 +159,7 @@ enum AllowedIPsBuilder {
         return range(ip: ip, prefix: pfx)
     }
 
-    private static func range(ip: UInt32, prefix: Int) -> IPRange {
+    static func range(ip: UInt32, prefix: Int) -> IPRange {
         if prefix <= 0 { return IPRange(start: 0, end: 0xFFFF_FFFF) }
         if prefix >= 32 { return IPRange(start: ip, end: ip) }
         let size = UInt64(1) << (32 - prefix)
@@ -169,7 +169,7 @@ enum AllowedIPsBuilder {
 
     // MARK: - Complement (0.0.0.0/0 минус excludes)
 
-    private static func complement(of ranges: [IPRange]) -> [String] {
+    static func complement(of ranges: [IPRange]) -> [String] {
         let merged = merge(ranges)
         var gaps: [IPRange] = []
         var cur: UInt64 = 0
@@ -188,7 +188,7 @@ enum AllowedIPsBuilder {
         return out
     }
 
-    private static func merge(_ ranges: [IPRange]) -> [IPRange] {
+    static func merge(_ ranges: [IPRange]) -> [IPRange] {
         guard !ranges.isEmpty else { return [] }
         let sorted = ranges.sorted { $0.start < $1.start }
         var out: [IPRange] = [sorted[0]]
@@ -203,7 +203,7 @@ enum AllowedIPsBuilder {
     }
 
     // Разбивает диапазон [start, end] на минимальный набор CIDR-префиксов.
-    private static func appendPrefixes(start: UInt32, end: UInt32, into out: inout [String]) {
+    static func appendPrefixes(start: UInt32, end: UInt32, into out: inout [String]) {
         var s = UInt64(start)
         let e = UInt64(end)
         while s <= e {
@@ -218,7 +218,7 @@ enum AllowedIPsBuilder {
         }
     }
 
-    private static func cidr(_ ip: UInt32, _ prefix: Int) -> String {
+    static func cidr(_ ip: UInt32, _ prefix: Int) -> String {
         "\((ip >> 24) & 0xFF).\((ip >> 16) & 0xFF).\((ip >> 8) & 0xFF).\(ip & 0xFF)/\(prefix)"
     }
 }

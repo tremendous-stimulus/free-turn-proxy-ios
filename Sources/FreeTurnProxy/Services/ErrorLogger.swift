@@ -96,7 +96,7 @@ final class ErrorLogger {
         return f
     }()
 
-    private static func parseGoLine(_ raw: String) -> LogEntry? {
+    static func parseGoLine(_ raw: String) -> LogEntry? {
         let ns = raw as NSString
         guard let m = goLineRegex.firstMatch(in: raw, range: NSRange(location: 0, length: ns.length)),
               m.numberOfRanges == 6 else { return nil }

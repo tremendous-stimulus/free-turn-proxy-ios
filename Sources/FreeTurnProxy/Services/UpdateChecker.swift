@@ -24,7 +24,7 @@ enum UpdateChecker {
     }
 
     // Сравнение semver: возвращает true если a > b.
-    private static func isNewer(_ a: String, than b: String) -> Bool {
+    static func isNewer(_ a: String, than b: String) -> Bool {
         let av = a.split(separator: ".").compactMap { Int($0) }
         let bv = b.split(separator: ".").compactMap { Int($0) }
         let len = max(av.count, bv.count)
