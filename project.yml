@@ -78,15 +78,32 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         CODE_SIGNING_ALLOWED: "NO"
 
+  FreeTurnProxyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/FreeTurnProxyUITests
+    dependencies:
+      - target: FreeTurnProxy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.freeturn.proxy.uitests
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGNING_ALLOWED: "NO"
+
 schemes:
   FreeTurnProxy:
     build:
       targets:
         FreeTurnProxy: all
         FreeTurnProxyTests: test
+        FreeTurnProxyUITests: test
     test:
       targets:
         - FreeTurnProxyTests
+        - FreeTurnProxyUITests
       gatherCoverageData: true
       coverageTargets:
         - FreeTurnProxy

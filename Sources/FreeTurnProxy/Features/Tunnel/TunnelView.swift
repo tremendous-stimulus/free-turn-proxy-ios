@@ -145,7 +145,11 @@ struct TunnelView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
-                if let e = vm.linkError { FieldError(e) }
+                if let e = vm.linkError {
+                    FieldError(e)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("link-validation-error")
+                }
             }
             Button {
                 Task { await vm.createCall() }
@@ -185,6 +189,7 @@ struct TunnelView: View {
                 } label: {
                     Image(systemName: "plus.circle.fill").font(.title3)
                 }
+                .accessibilityLabel("Добавить конфигурацию")
                 .disabled(proxy.isRunning)
             }
 
