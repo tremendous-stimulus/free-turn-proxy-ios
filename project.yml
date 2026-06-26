@@ -104,6 +104,9 @@ schemes:
       targets:
         - FreeTurnProxyTests
         - FreeTurnProxyUITests
+      # Без LLDB: на Xcode 26 RC2 debugger version store падает с ошибкой и ретраит
+      # перед каждым тестом — добавляет 30s–3 мин висения. CI debugger не нужен.
+      debugEnabled: false
       gatherCoverageData: true
       coverageTargets:
         - FreeTurnProxy
