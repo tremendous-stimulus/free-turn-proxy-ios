@@ -35,9 +35,12 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           brew install xcodegen go-task
 
-      - name: Cache Mobile.xcframework
+      # actions/cache@v4 сохраняет кеш только при успехе всей job — пока тесты
+      # падали, фреймворк не кешировался. Разделяем restore/save и сохраняем
+      # сразу после build с if: always(), чтобы кеш жил независимо от тестов.
+      - name: Restore Mobile.xcframework cache
         id: cache-fw
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: Frameworks/Mobile.xcframework
           key: mobile-xcframework-v1.5.2
@@ -47,6 +50,13 @@ jobs:
         run: |
           gomobile init
           make framework
+
+      - name: Save Mobile.xcframework cache
+        if: always() && steps.cache-fw.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Frameworks/Mobile.xcframework
+          key: mobile-xcframework-v1.5.2
 
       - name: Generate Xcode project
         run: make project
