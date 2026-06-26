@@ -48,14 +48,13 @@ jobs:
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          brew install xcodegen jq
+          brew install xcodegen jq go-task
 
       - name: gomobile init
         run: gomobile init
 
-      # Фреймворк собираем из Go-ветки с captcha-мостом (master форка не трогаем).
-      - name: Build framework (captcha branch)
-        run: make framework GO_REPO=https://github.com/tremendous-stimulus/free-turn-proxy GO_REF=feat/manual-captcha
+      - name: Build framework
+        run: make framework
 
       - name: Generate Xcode project
         run: make project
