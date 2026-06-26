@@ -77,8 +77,5 @@ struct MainTabView: View {
         } message: {
             Text("Приложение анонимно отправляет технические логи подключения — это помогает находить и исправлять сбои. Личные данные не передаются.\n\nОтключить можно в настройках вкладки «Логи».")
         }
-        .sheet(item: $captcha.request) { req in
-            CaptchaSolveView(url: req.url)
-        }
     }
 }
