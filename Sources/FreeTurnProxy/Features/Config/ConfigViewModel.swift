@@ -6,6 +6,7 @@ final class ConfigViewModel: ObservableObject {
     @Published var inputError: String?
     @Published var tunnelName = ""
     @Published var showNaming = false
+    @Published var selectedScheme: AllowedIPsBuilder.Scheme = .withoutWhitelist
 
     // Готовый .conf и переход на экран экспорта (внутри того же sheet).
     @Published var exportURL: URL?
@@ -37,13 +38,12 @@ final class ConfigViewModel: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined()
         let fileName = (safeName.isEmpty ? "tunnel" : safeName) + ".conf"
-        // Локальный адрес прокси из настроек туннеля — на него патчим Endpoint.
         let endpoint = AppSettings.listen
+        let scheme = selectedScheme
 
         Task.detached {
             do {
-                // Весь интернет минус белый список РФ и локальные сети.
-                let allowedIPs = try await AllowedIPsBuilder.build()
+                let allowedIPs = try await AllowedIPsBuilder.build(scheme: scheme)
                 let patched = ConfigPatcher.patch(text, allowedIPs: allowedIPs, endpoint: endpoint)
                 let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
                 try patched.write(to: url, atomically: true, encoding: .utf8)
@@ -79,7 +79,7 @@ final class ConfigViewModel: ObservableObject {
                                   options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
         let code = (detector?.features(in: ciImage) as? [CIQRCodeFeature])?.first?.messageString
         guard let code else { inputError = "QR-код не найден на фото"; return }
-        stage(rawConfig: code, defaultName: "tunnel")
+        stage(rawConfig: code, defaultName: ConfigStore.shared.selected?.name ?? "tunnel")
     }
 
     func handleImport(_ result: Result<[URL], Error>) {

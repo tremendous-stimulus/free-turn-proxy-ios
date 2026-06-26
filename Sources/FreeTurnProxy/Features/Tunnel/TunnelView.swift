@@ -4,10 +4,12 @@ struct TunnelView: View {
     @StateObject private var vm = TunnelViewModel()
     @ObservedObject private var proxy = ProxyManager.shared
     @ObservedObject private var store = ConfigStore.shared
+    @ObservedObject private var captcha = CaptchaController.shared
     @State private var editorTarget: EditorTarget?
     @State private var pendingDelete: SavedConfig?
     @State private var showUndo = false
     @State private var showImportPicker = false
+    @Environment(\.isBannerVisible) private var isBannerVisible
 
     var body: some View {
         NavigationStack {
@@ -23,7 +25,7 @@ struct TunnelView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Туннель")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(isBannerVisible ? .inline : .large)
             .alert("Ошибка", isPresented: .init(
                 get: { vm.errorText != nil },
                 set: { if !$0 { vm.errorText = nil } }
@@ -114,16 +116,18 @@ struct TunnelView: View {
         switch proxy.state {
         case "connected":  return .green
         case "connecting": return .yellow
+        case "captcha":    return .yellow
         case "error":      return .red
         default:           return Color.secondary.opacity(0.4)
         }
     }
-    
+
     private var statusMessage: String {
         switch proxy.state {
         case "connecting": return "Подключение..."
         case "connected":  return "Подключено"
-        case "error":      return proxy.errorMessage.isEmpty ? "Неизвестная ошибка, проверьте логи" : "Ошибка: \(proxy.errorMessage)"
+        case "captcha":    return "Нужно решить капчу"
+        case "error":      return "Ошибка. Проверьте логи: \(proxy.errorMessage)"
         default:           return "Не подключено"
         }
     }
@@ -237,17 +241,40 @@ struct TunnelView: View {
         VStack(spacing: 14) {
             statusSection
 
-            Button { vm.toggle() } label: {
-                Label(
-                    proxy.isRunning ? "Отключиться" : "Подключиться",
-                    systemImage: proxy.isRunning ? "stop.fill" : "play.fill"
-                )
-                .frame(maxWidth: .infinity)
+            if captcha.pendingURL != nil {
+                // Во время капчи: «отключиться» ужимается в кружок-стоп, а
+                // «Показать капчу» занимает оставшееся место справа.
+                HStack(spacing: 12) {
+                    Button { vm.toggle() } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .frame(width: 50, height: 50)
+                            .background(Color.red, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button { captcha.reopen() } label: {
+                        Label("Показать капчу", systemImage: "checkmark.shield")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(.orange)
+                }
+            } else {
+                Button { vm.toggle() } label: {
+                    Label(
+                        proxy.isRunning ? "Отключиться" : "Подключиться",
+                        systemImage: proxy.isRunning ? "stop.fill" : "play.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(proxy.isRunning ? .red : .blue)
+                .disabled(!vm.canConnect && !proxy.isRunning)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(proxy.isRunning ? .red : .blue)
-            .disabled(!vm.canConnect && !proxy.isRunning)
 
             if proxy.state == "connected" {
                 statsBlock

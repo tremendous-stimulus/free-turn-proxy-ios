@@ -1,15 +1,43 @@
 import Foundation
 
 // Считает AllowedIPs для inverse split-tunnel: ВЕСЬ интернет (0.0.0.0/0)
-// за вычетом белого списка РФ и локальных сетей. Так в туннель уходит весь
-// внешний трафик — открываются и заблокированные, и «серые» ресурсы, — а
-// то, что в белом списке (включая VK), остаётся напрямую.
+// за вычетом выбранного набора исключений и локальных сетей.
 enum AllowedIPsBuilder {
-    // Белый список CIDR РФ (доступен при веерных отключениях мобильного
-    // интернета). Тянем напрямую из источника — CIDR достаём регуляркой.
+
+    // MARK: – Scheme
+
+    enum Scheme: String, CaseIterable, Identifiable {
+        case fullInternet   = "Весь интернет"
+        case withoutWhitelist = "Всё кроме белых списков"
+        case withoutVK      = "Всё кроме подсетей VK"
+        var id: String { rawValue }
+
+        var hint: String {
+            switch self {
+            case .fullInternet:    return "Весь трафик идёт через VPN"
+            case .withoutWhitelist: return "Белый список РФ (VK, банки и т.д.) — напрямую"
+            case .withoutVK:       return "Только подсети VK идут напрямую"
+            }
+        }
+    }
+
+    // MARK: – Sources
+
+    // Белый список CIDR РФ (веерные отключения).
     private static let whitelistURL = URL(string:
         "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/main/cidrwhitelist.txt"
     )!
+
+    // RIPE stat API: анонсируемые префиксы основного ASN ВКонтакте (AS47764).
+    private static let vkRipeURL = URL(string:
+        "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS47764"
+    )!
+
+    // Запасной список VK-префиксов на случай недоступности RIPE API.
+    private static let vkFallbackCIDRs = [
+        "87.240.128.0/18", "185.68.16.0/22", "93.186.224.0/21",
+        "5.61.16.0/20", "212.119.96.0/20",
+    ]
 
     // Локальные/служебные диапазоны — всегда мимо туннеля. 127/8 критичен:
     // там слушает локальный прокси (127.0.0.1:9000), иначе WG-хендшейк
@@ -19,18 +47,35 @@ enum AllowedIPsBuilder {
         "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/3",
     ]
 
+    // MARK: – Errors
+
     enum BuildError: LocalizedError {
         case fetch
         case empty
         var errorDescription: String? {
             switch self {
-            case .fetch: return "Не удалось загрузить белый список — проверь интернет"
-            case .empty: return "Белый список пуст или недоступен"
+            case .fetch: return "Не удалось загрузить список адресов — проверьте интернет"
+            case .empty: return "Список адресов пуст или недоступен"
             }
         }
     }
 
-    static func build() async throws -> String {
+    // MARK: – Public entry point
+
+    static func build(scheme: Scheme) async throws -> String {
+        switch scheme {
+        case .fullInternet:
+            return "0.0.0.0/0"
+        case .withoutWhitelist:
+            return try await buildWithoutWhitelist()
+        case .withoutVK:
+            return try await buildWithoutVK()
+        }
+    }
+
+    // MARK: – Private builders
+
+    private static func buildWithoutWhitelist() async throws -> String {
         let data: Data
         do {
             let (d, resp) = try await URLSession.shared.data(from: whitelistURL)
@@ -50,6 +95,34 @@ enum AllowedIPsBuilder {
         let prefixes = complement(of: excludes)
         guard !prefixes.isEmpty else { throw BuildError.empty }
         return prefixes.joined(separator: ", ")
+    }
+
+    private static func buildWithoutVK() async throws -> String {
+        let vkCIDRStrings = await fetchVKCIDRs()
+        let vkRanges = vkCIDRStrings.compactMap(parseCIDR)
+        guard !vkRanges.isEmpty else { throw BuildError.empty }
+
+        var excludes = vkRanges
+        excludes.append(contentsOf: localRanges.compactMap(parseCIDR))
+
+        let prefixes = complement(of: excludes)
+        guard !prefixes.isEmpty else { throw BuildError.empty }
+        return prefixes.joined(separator: ", ")
+    }
+
+    // Тянем префиксы AS47764 из RIPE stat; при ошибке — fallback-константы.
+    private static func fetchVKCIDRs() async -> [String] {
+        struct RIPEPrefix: Decodable { let prefix: String }
+        struct RIPEData: Decodable { let prefixes: [RIPEPrefix] }
+        struct RIPEResponse: Decodable { let data: RIPEData }
+
+        if let (d, resp) = try? await URLSession.shared.data(from: vkRipeURL),
+           (resp as? HTTPURLResponse)?.statusCode == 200,
+           let parsed = try? JSONDecoder().decode(RIPEResponse.self, from: d),
+           !parsed.data.prefixes.isEmpty {
+            return parsed.data.prefixes.map(\.prefix)
+        }
+        return vkFallbackCIDRs
     }
 
     // MARK: - Parsing

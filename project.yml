@@ -27,7 +27,35 @@ targets:
         DEVELOPMENT_TEAM: T5LYQB4762
         CODE_SIGN_STYLE: Automatic
     dependencies:
-      - framework: Frameworks/Ios.xcframework
+      - framework: Frameworks/Mobile.xcframework
+        embed: true
+        codeSign: true
+
+  # Тестовая сборка: отдельный bundle id + имя «Free Turn Test» + иконка с
+  # плашкой TEST. Ставится рядом с продом, не конфликтует. Используется как
+  # локально (схема FreeTurnProxyTest), так и в воркфлоу testing.yml.
+  FreeTurnProxyTest:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+        excludes:
+          - "Info.plist"
+          - "Info-Test.plist"
+      - path: Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.freeturn.proxy.testing
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        INFOPLIST_FILE: Sources/Info-Test.plist
+        ENABLE_BITCODE: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIconTest
+        DEVELOPMENT_TEAM: T5LYQB4762
+        CODE_SIGN_STYLE: Automatic
+    dependencies:
+      - framework: Frameworks/Mobile.xcframework
         embed: true
         codeSign: true
 

@@ -10,4 +10,6 @@ struct SavedConfig: Identifiable, Codable, Equatable {
     var dns: String = ""
     var listen: String = ""
     var transport: String = "udp"
+    // Всегда решать VK captcha вручную (через WebView), минуя авто-решатель.
+    var manualCaptcha: Bool = false
 }
