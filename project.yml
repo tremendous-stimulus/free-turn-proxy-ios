@@ -68,6 +68,8 @@ targets:
       - path: Tests/FreeTurnProxyTests
     dependencies:
       - target: FreeTurnProxy
+      - framework: Frameworks/Mobile.xcframework
+        embed: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.freeturn.proxy.tests
