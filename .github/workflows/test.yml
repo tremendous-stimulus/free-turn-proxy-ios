@@ -61,21 +61,25 @@ jobs:
           echo "Picked simulator: $NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Boot simulator
+      # Один билд для обоих наборов тестов — затем test-without-building использует
+      # общий derivedDataPath. Без этого xcodebuild test пересобирал бы app дважды.
+      - name: Build for testing
         run: |
-          UDID=$(xcrun simctl list devices available --json \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); \
-              found=[(v[0]['udid'],v[0]['name']) for k,v in d['devices'].items() if 'iOS' in k and v]; \
-              found.sort(key=lambda t: ('iPhone' not in t[1], t[1])); print(found[0][0])")
-          xcrun simctl boot "$UDID" || true
-          xcrun simctl bootstatus "$UDID" -b
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -scheme FreeTurnProxy \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet
 
       - name: Run unit tests
         run: |
           set -o pipefail
-          xcodebuild test \
+          xcodebuild test-without-building \
             -scheme FreeTurnProxy \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -derivedDataPath DerivedData \
             -only-testing:FreeTurnProxyTests \
             -resultBundlePath TestResults-unit.xcresult \
             CODE_SIGNING_ALLOWED=NO
@@ -83,9 +87,10 @@ jobs:
       - name: Run UI smoke tests
         run: |
           set -o pipefail
-          xcodebuild test \
+          xcodebuild test-without-building \
             -scheme FreeTurnProxy \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -derivedDataPath DerivedData \
             -only-testing:FreeTurnProxyUITests \
             -resultBundlePath TestResults-ui.xcresult \
             CODE_SIGNING_ALLOWED=NO
