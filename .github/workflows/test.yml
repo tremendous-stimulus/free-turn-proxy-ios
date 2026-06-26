@@ -76,6 +76,17 @@ jobs:
           path: Frameworks/Mobile.xcframework
           key: mobile-xcframework-v1.5.2
 
+      # ModuleCache — прекомпилированные системные модули (SwiftUI, UIKit,
+      # Foundation). Без него каждый build тратит ~60s на их перекомпиляцию.
+      # Ключ привязан к версии Xcode, т.к. кеш бьётся при апгрейде Xcode.
+      - name: Cache Xcode ModuleCache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+          key: xcode-modulecache-${{ runner.os }}-${{ hashFiles('**/*.swift', 'project.yml') }}
+          restore-keys: |
+            xcode-modulecache-${{ runner.os }}-
+
       - name: Generate Xcode project
         run: make project
 
@@ -88,7 +99,12 @@ jobs:
             -scheme FreeTurnProxy \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
             -derivedDataPath DerivedData \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf \
+            ONLY_ACTIVE_ARCH=YES \
             -quiet
 
       - name: Run unit tests
