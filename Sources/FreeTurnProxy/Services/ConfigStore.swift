@@ -19,12 +19,21 @@ final class ConfigStore: ObservableObject {
     // Импорт открытого .freeturn — редактор на вкладке «Туннель» подхватит.
     @Published var pendingImport: SavedConfig?
 
-    private let d = UserDefaults.standard
+    private let d: UserDefaults
     private let configsKey = "savedConfigs.v1"
     private let selectedKey = "savedConfigs.selected"
     private let shakeHintKey = "shakeHintPending"
 
-    private init() { load() }
+    private init() {
+        self.d = .standard
+        load()
+    }
+
+    // Инжектируемый init — для тестов на изолированном UserDefaults.
+    init(defaults: UserDefaults) {
+        self.d = defaults
+        load()
+    }
 
     var lastDeleted: Deleted? { deletedStack.last }
 
