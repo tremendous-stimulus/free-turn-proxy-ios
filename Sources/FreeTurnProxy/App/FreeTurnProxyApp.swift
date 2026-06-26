@@ -7,6 +7,8 @@ struct FreeTurnProxyApp: App {
         Keychain.wipeSecretsOnFreshInstall()
         // Регистрируем мост ручного решения captcha (Go -> WebView).
         CaptchaBridge.register()
+        // Отправляем логи ошибок прошлых сессий, если есть сеть.
+        ErrorLogger.shared.flushOnLaunch()
     }
 
     var body: some Scene {

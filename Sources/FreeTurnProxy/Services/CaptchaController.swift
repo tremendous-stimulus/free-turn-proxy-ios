@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import UIKit
 import UserNotifications
-import Ios
+import Mobile
 
 // Ручное решение VK Smart Captcha. Когда авто-решатель в Go не справился, он
 // поднимает локальный прокси VK-страницы и через gomobile зовёт show(url:) —
@@ -81,10 +81,10 @@ extension CaptchaController: UNUserNotificationCenterDelegate {
     }
 }
 
-// Реализация gomobile-протокола IosCaptchaPresenter (Go -> Swift колбэк).
+// Реализация gomobile-протокола MobileCaptchaPresenter (Go -> Swift колбэк).
 // В Swift протокол импортируется с суффиксом Protocol (одноимённый класс-обёртка
-// занимает имя IosCaptchaPresenter).
-private final class CaptchaPresenterBridge: NSObject, IosCaptchaPresenterProtocol {
+// занимает имя MobileCaptchaPresenter).
+private final class CaptchaPresenterBridge: NSObject, MobileCaptchaPresenterProtocol {
     func show(_ url: String?) { CaptchaController.shared.show(url ?? "") }
     func hide() { CaptchaController.shared.hide() }
 }
@@ -96,7 +96,7 @@ enum CaptchaBridge {
     static func register() {
         let p = CaptchaPresenterBridge()
         presenter = p
-        IosSetCaptchaPresenter(p)
+        MobileSetCaptchaPresenter(p)
         CaptchaController.shared.registerNotifications()
     }
 }

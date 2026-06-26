@@ -1,5 +1,5 @@
 import Foundation
-import Ios
+import Mobile
 
 @MainActor
 final class LogsViewModel: ObservableObject {
@@ -19,26 +19,22 @@ final class LogsViewModel: ObservableObject {
     }
 
     func clear() {
-        IosClearLogs()
+        MobileClearLogs()
+        ErrorLogger.shared.clear()
         logs = ""
     }
 
-    // Сохраняем текущие логи в .txt во временную папку и отдаём URL для шаринга.
     func exportFile() -> URL? {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let name = "freeturn-logs-\(fmt.string(from: Date())).txt"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-        do {
-            try logs.write(to: url, atomically: true, encoding: .utf8)
-            return url
-        } catch {
-            return nil
-        }
+        try? logs.write(to: url, atomically: true, encoding: .utf8)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     private func refresh() {
-        let new = IosGetLogs()
+        let new = ErrorLogger.shared.displayLogs
         if new != logs { logs = new }
     }
 }
