@@ -26,10 +26,7 @@ struct TunnelView: View {
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Туннель")
             .navigationBarTitleDisplayMode(isBannerVisible ? .inline : .large)
-            .alert("Ошибка", isPresented: .init(
-                get: { vm.errorText != nil },
-                set: { if !$0 { vm.errorText = nil } }
-            )) {
+            .alert("Ошибка", isPresented: .isNotNil($vm.errorText)) {
                 Button("OK") { vm.errorText = nil }
             } message: {
                 Text(vm.errorText ?? "")
@@ -43,10 +40,7 @@ struct TunnelView: View {
                     }
                 }
             }
-            .sheet(isPresented: .init(
-                get: { vm.shareURL != nil },
-                set: { if !$0 { vm.shareURL = nil } }
-            )) {
+            .sheet(isPresented: .isNotNil($vm.shareURL)) {
                 if let url = vm.shareURL { ShareSheet(items: [url]) }
             }
             .fileImporter(
@@ -55,10 +49,9 @@ struct TunnelView: View {
                 allowsMultipleSelection: false,
                 onCompletion: handleImportPick
             )
-            .alert("Удалить «\(pendingDelete?.name ?? "")»?", isPresented: .init(
-                get: { pendingDelete != nil },
-                set: { if !$0 { pendingDelete = nil } }
-            ), presenting: pendingDelete) { c in
+            .alert("Удалить «\(pendingDelete?.name ?? "")»?",
+                   isPresented: .isNotNil($pendingDelete),
+                   presenting: pendingDelete) { c in
                 Button("Удалить", role: .destructive) { store.delete(c) }
                 Button("Отмена", role: .cancel) {}
             }
@@ -114,21 +107,21 @@ struct TunnelView: View {
 
     private var statusColor: Color {
         switch proxy.state {
-        case "connected":  return .green
-        case "connecting": return .yellow
-        case "captcha":    return .yellow
-        case "error":      return .red
-        default:           return Color.secondary.opacity(0.4)
+        case .connected:  return .green
+        case .connecting: return .yellow
+        case .captcha:    return .yellow
+        case .error:      return .red
+        case .idle:       return Color.secondary.opacity(0.4)
         }
     }
 
     private var statusMessage: String {
         switch proxy.state {
-        case "connecting": return "Подключение..."
-        case "connected":  return "Подключено"
-        case "captcha":    return "Нужно решить капчу"
-        case "error":      return "Ошибка. Проверьте логи: \(proxy.errorMessage)"
-        default:           return "Не подключено"
+        case .connecting: return "Подключение..."
+        case .connected:  return "Подключено"
+        case .captcha:    return "Нужно решить капчу"
+        case .error:      return "Ошибка. Проверьте логи: \(proxy.errorMessage)"
+        case .idle:       return "Не подключено"
         }
     }
 
@@ -281,7 +274,7 @@ struct TunnelView: View {
                 .disabled(!vm.canConnect && !proxy.isRunning)
             }
 
-            if proxy.state == "connected" {
+            if proxy.state == .connected {
                 statsBlock
                 amneziaHint
             }
@@ -333,20 +326,6 @@ struct TunnelView: View {
         }
     }
 
-    private func formatRate(_ bytesPerSec: Int64) -> String {
-        let bps = Double(bytesPerSec * 8)
-        if bps >= 1_000_000 { return String(format: "%.1f Mbit/s", bps / 1_000_000) }
-        if bps >= 1_000 { return String(format: "%.0f kbit/s", bps / 1_000) }
-        return "0 bit/s"
-    }
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        let b = Double(bytes)
-        if b >= 1024 * 1024 { return String(format: "%.1f МБ", b / (1024 * 1024)) }
-        if b >= 1024 { return String(format: "%.0f КБ", b / 1024) }
-        return "\(bytes) Б"
-    }
-
     // Разовая подсказка про шейк-отмену удаления, авто-скрытие через ~4с.
     private var shakeHintBubble: some View {
         HStack(spacing: 8) {
@@ -361,7 +340,7 @@ struct TunnelView: View {
         .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
         .transition(.move(edge: .top).combined(with: .opacity))
         .task {
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            try? await Task.sleep(for: .seconds(4))
             withAnimation { store.dismissShakeHint() }
         }
     }

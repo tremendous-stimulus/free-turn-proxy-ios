@@ -12,32 +12,23 @@ import WebKit
 // VK для client_id 7793118 не принимает. Единственный рабочий путь —
 // перехват навигации внутри WKWebView через navigationDelegate.
 
-let vkOAuthURL = URL(string:
-    "https://oauth.vk.com/authorize" +
-    "?client_id=7793118" +
-    "&scope=video" +
-    "&redirect_uri=https://oauth.vk.com/blank.html" +
-    "&response_type=token" +
-    "&display=mobile" +
-    "&v=5.131"
-)!
-
-private func parseFragment(_ fragment: String) -> [String: String] {
-    var params: [String: String] = [:]
-    for pair in fragment.split(separator: "&") {
-        let kv = pair.split(separator: "=", maxSplits: 1)
-        if kv.count == 2 { params[String(kv[0])] = String(kv[1]) }
-    }
-    return params
-}
-
 struct VKAuthSheet: View {
     let onToken: (String) -> Void
     @Environment(\.dismiss) private var dismiss
 
+    private static let oauthURL = URL(string:
+        "https://oauth.vk.com/authorize" +
+        "?client_id=7793118" +
+        "&scope=video" +
+        "&redirect_uri=https://oauth.vk.com/blank.html" +
+        "&response_type=token" +
+        "&display=mobile" +
+        "&v=5.131"
+    )!
+
     var body: some View {
         NavigationStack {
-            VKWebView(url: vkOAuthURL) { token in
+            VKWebView(url: Self.oauthURL) { token in
                 onToken(token)
                 dismiss()
             }
@@ -137,14 +128,23 @@ private struct VKWebView: UIViewRepresentable {
         }
 
         private func accessToken(from url: URL) -> String? {
-            if let f = url.fragment, let t = parseFragment(f)["access_token"] { return t }
-            if let q = url.query, let t = parseFragment(q)["access_token"] { return t }
+            if let f = url.fragment, let t = Self.parseFragment(f)["access_token"] { return t }
+            if let q = url.query, let t = Self.parseFragment(q)["access_token"] { return t }
             return nil
         }
 
         private func isSilentToken(_ url: URL) -> Bool {
             guard let f = url.fragment, let decoded = f.removingPercentEncoding else { return false }
             return decoded.contains("silent_token")
+        }
+
+        private static func parseFragment(_ fragment: String) -> [String: String] {
+            var params: [String: String] = [:]
+            for pair in fragment.split(separator: "&") {
+                let kv = pair.split(separator: "=", maxSplits: 1)
+                if kv.count == 2 { params[String(kv[0])] = String(kv[1]) }
+            }
+            return params
         }
     }
 }

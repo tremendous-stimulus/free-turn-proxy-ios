@@ -42,10 +42,7 @@ struct LogsView: View {
                 }
             }
         }
-        .sheet(isPresented: .init(
-            get: { shareURL != nil },
-            set: { if !$0 { shareURL = nil } }
-        )) {
+        .sheet(isPresented: .isNotNil($shareURL)) {
             if let url = shareURL { ShareSheet(items: [url]) }
         }
         .sheet(isPresented: $showSettings) {

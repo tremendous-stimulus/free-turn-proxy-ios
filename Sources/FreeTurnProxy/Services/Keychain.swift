@@ -16,7 +16,7 @@ enum Keychain {
     // оставшиеся от предыдущей установки.
     static func wipeSecretsOnFreshInstall() {
         let d = UserDefaults.standard
-        let flag = "keychainBoundToInstall.v1"
+        let flag = DefaultsKeys.keychainBoundToInstall
         guard !d.bool(forKey: flag) else { return }
         remove(vkTokenAccount)
         d.set(true, forKey: flag)

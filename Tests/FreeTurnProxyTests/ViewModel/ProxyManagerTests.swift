@@ -51,7 +51,7 @@ final class ProxyManagerTests: XCTestCase {
         try pm.start()
         pm.stop()
         XCTAssertFalse(pm.isRunning)
-        XCTAssertEqual(pm.state, "idle")
+        XCTAssertEqual(pm.state, .idle)
         XCTAssertEqual(pm.connectedStreams, 0)
         XCTAssertEqual(pm.totalStreams, 0)
         XCTAssertTrue(mock.stopCalled)

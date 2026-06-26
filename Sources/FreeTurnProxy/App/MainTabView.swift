@@ -4,21 +4,30 @@ struct MainTabView: View {
     @ObservedObject private var store = ConfigStore.shared
     @ObservedObject private var captcha = CaptchaController.shared
     @State private var tab = 0
-    @AppStorage("telemetry_onboarded") private var onboarded = false
+    @AppStorage(DefaultsKeys.telemetryOnboarded) private var onboarded = false
     @State private var certDaysLeft: Int?
     @State private var availableUpdate: String?
 
     private static let warnThreshold = 3
 
-    private var isBannerVisible: Bool {
-        (certDaysLeft.map { $0 <= Self.warnThreshold } ?? false) || availableUpdate != nil
+    private enum ActiveBanner {
+        case cert(Int)
+        case update(String)
     }
 
+    private var activeBannerKind: ActiveBanner? {
+        if let days = certDaysLeft, days <= Self.warnThreshold { return .cert(days) }
+        if let version = availableUpdate { return .update(version) }
+        return nil
+    }
+
+    private var isBannerVisible: Bool { activeBannerKind != nil }
+
     @ViewBuilder private var activeBanner: some View {
-        if let days = certDaysLeft, days <= Self.warnThreshold {
-            CertExpiryBanner(daysLeft: days)
-        } else if let version = availableUpdate {
-            UpdateBanner(latestVersion: version)
+        switch activeBannerKind {
+        case .cert(let days): CertExpiryBanner(daysLeft: days)
+        case .update(let version): UpdateBanner(latestVersion: version)
+        case nil: EmptyView()
         }
     }
 

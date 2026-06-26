@@ -5,7 +5,7 @@ final class ProxyManager: ObservableObject {
     static let shared = ProxyManager()
 
     @Published var isRunning = false
-    @Published var state: String = "idle"
+    @Published var state: TunnelState = .idle
     @Published var connectedStreams: Int = 0
     @Published var totalStreams: Int = 0
     @Published var errorMessage: String = ""
@@ -60,25 +60,16 @@ final class ProxyManager: ObservableObject {
     func start() throws {
         guard let config else { throw AppError.noConfig }
         try audio.start()
-        mobile.setManualCaptcha(config.manualCaptcha)
-        try mobile.start(
-            link: config.link,
-            peer: config.peer,
-            dns: config.dns ?? "",
-            listen: config.listen ?? "127.0.0.1:9000",
-            transport: config.transport,
-            obfKey: config.obfKey,
-            clientType: "ios"
-        )
+        try startMobile(config)
         isRunning = true
-        let persistLogs = UserDefaults.standard.object(forKey: "persist_logs") as? Bool ?? false
+        let persistLogs = UserDefaults.standard.object(forKey: DefaultsKeys.persistLogs) as? Bool ?? false
         if persistLogs {
             ErrorLogger.shared.resetGoPosition()
         } else {
             ErrorLogger.shared.clear()
         }
         startPolling()
-        startLogTimers()
+        startActiveTimers()
         network.onChange = { [weak self] in
             DispatchQueue.main.async { self?.scheduleReconnect() }
         }
@@ -94,11 +85,26 @@ final class ProxyManager: ObservableObject {
         mobile.stop()
         audio.stop()
         isRunning = false
-        state = "idle"
+        state = .idle
         connectedStreams = 0
         totalStreams = 0
         errorMessage = ""
         stopPolling()
+    }
+
+    // MARK: – Запуск Mobile (вынесено для повторного использования при reconnect)
+
+    private func startMobile(_ cfg: FreeTurnConfig) throws {
+        mobile.setManualCaptcha(cfg.manualCaptcha)
+        try mobile.start(
+            link: cfg.link,
+            peer: cfg.peer,
+            dns: cfg.dns ?? "",
+            listen: cfg.listen ?? "127.0.0.1:9000",
+            transport: cfg.transport,
+            obfKey: cfg.obfKey,
+            clientType: "ios"
+        )
     }
 
     // MARK: – Переподключение при смене сети
@@ -114,22 +120,13 @@ final class ProxyManager: ObservableObject {
     private func performReconnect(retry: Int = 1) {
         guard isRunning, let config else { return }
         isReconnecting = true
-        state = "connecting"
+        state = .connecting
         connectedStreams = 0
         mobile.stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, self.isRunning, let config = self.config else { return }
-            self.mobile.setManualCaptcha(config.manualCaptcha)
             do {
-                try self.mobile.start(
-                    link: config.link,
-                    peer: config.peer,
-                    dns: config.dns ?? "",
-                    listen: config.listen ?? "127.0.0.1:9000",
-                    transport: config.transport,
-                    obfKey: config.obfKey,
-                    clientType: "ios"
-                )
+                try self.startMobile(config)
                 self.isReconnecting = false
             } catch {
                 if retry > 0 {
@@ -152,7 +149,7 @@ final class ProxyManager: ObservableObject {
             let snap = self.mobile.getState()
             DispatchQueue.main.async {
                 if self.isReconnecting { return }
-                let st = snap?.state ?? "idle"
+                let st = TunnelState(goState: snap?.state ?? "idle")
                 self.state = st
                 self.connectedStreams = snap?.streams ?? 0
                 self.totalStreams = snap?.total ?? 0
@@ -171,7 +168,7 @@ final class ProxyManager: ObservableObject {
                     self.lastLoggedError = ""
                 }
 
-                let active = (st == "connecting" || st == "connected" || st == "captcha")
+                let active = (st == .connecting || st == .connected || st == .captcha)
                 self.isRunning = active
                 if !active {
                     ErrorLogger.shared.shipBatch()
@@ -200,12 +197,12 @@ final class ProxyManager: ObservableObject {
     }
 
     private func performProbe() {
-        guard state == "connected", isRunning, !isReconnecting else { return }
+        guard state == .connected, isRunning, !isReconnecting else { return }
         var req = URLRequest(url: Self.probeURL)
         req.timeoutInterval = Self.probeInterval - 0.5
         URLSession.shared.dataTask(with: req) { [weak self] _, _, error in
             DispatchQueue.main.async {
-                guard let self, self.state == "connected", self.isRunning else { return }
+                guard let self, self.state == .connected, self.isRunning else { return }
                 if let error {
                     ErrorLogger.shared.appendAppLine(level: "WRN",
                         message: "tunnel probe failed: \(error.localizedDescription)")
@@ -215,7 +212,7 @@ final class ProxyManager: ObservableObject {
         }.resume()
     }
 
-    private func startLogTimers() {
+    private func startActiveTimers() {
         logPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self else { return }
             ErrorLogger.shared.ingestGoLogs(self.mobile.getLogs())
@@ -225,8 +222,6 @@ final class ProxyManager: ObservableObject {
         }
         startProbing()
     }
-
-
 }
 
 enum AppError: LocalizedError {

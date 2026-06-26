@@ -9,7 +9,7 @@ final class TunnelViewModel: ObservableObject {
     @Published var shareURL: URL?
 
     // VK-ссылка (per-session) — персистится под прежним ключом.
-    @Published var link: String { didSet { d.set(link, forKey: "manualLink") } }
+    @Published var link: String { didSet { d.set(link, forKey: DefaultsKeys.manualLink) } }
 
     // VK-логин для генерации ссылки.
     @Published var creatingCall = false
@@ -23,7 +23,7 @@ final class TunnelViewModel: ObservableObject {
     private let vkTokenKey = Keychain.vkTokenAccount
 
     init() {
-        link = d.string(forKey: "manualLink") ?? ""
+        link = d.string(forKey: DefaultsKeys.manualLink) ?? ""
         vkAuthToken = Keychain.get(vkTokenKey)
     }
 

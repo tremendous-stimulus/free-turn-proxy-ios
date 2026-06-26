@@ -8,13 +8,12 @@ final class ErrorLogger {
 
     static let uploadURL = "https://telemetry.free-turn-proxy-ios.workers.dev/"
 
-    let sessionTag: String = UUID().uuidString.prefix(8).lowercased().description
+    let sessionTag: String = String(UUID().uuidString.prefix(8).lowercased())
 
     static let clientId: String = {
-        let key = "error_logger_client_id"
-        if let v = UserDefaults.standard.string(forKey: key) { return v }
-        let new = UUID().uuidString.prefix(8).lowercased().description
-        UserDefaults.standard.set(new, forKey: key)
+        if let v = UserDefaults.standard.string(forKey: DefaultsKeys.errorLoggerClientId) { return v }
+        let new = String(UUID().uuidString.prefix(8).lowercased())
+        UserDefaults.standard.set(new, forKey: DefaultsKeys.errorLoggerClientId)
         return new
     }()
 
@@ -33,6 +32,8 @@ final class ErrorLogger {
     private var lastGoLogLength = 0
     private var lastShippedIndex = 0
 
+    private static let maxEntries = 5000
+
     var displayLogs: String { entries.map(\.display).joined(separator: "\n") }
 
     // MARK: – Ingestion
@@ -49,6 +50,9 @@ final class ErrorLogger {
 
         let parsed = rawLines.compactMap(Self.parseGoLine)
         entries.append(contentsOf: parsed)
+        if entries.count > Self.maxEntries {
+            entries.removeFirst(entries.count - Self.maxEntries)
+        }
     }
 
     // App-level события.
@@ -57,6 +61,9 @@ final class ErrorLogger {
         let display = "\(Self.displayFmt.string(from: now)) [\(level)] [App] \(message)"
         let utcISO = Self.isoFmt.string(from: now)
         entries.append(LogEntry(display: display, utcISO: utcISO, level: level, message: "[App] \(message)"))
+        if entries.count > Self.maxEntries {
+            entries.removeFirst(entries.count - Self.maxEntries)
+        }
     }
 
     func resetGoPosition() { lastGoLogLength = 0 }
@@ -96,6 +103,13 @@ final class ErrorLogger {
         return f
     }()
 
+    // Кешируем Calendar — создание Calendar затратно, но todayUTC вычисляется свежим при каждом вызове.
+    private static let utcCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal
+    }()
+
     static func parseGoLine(_ raw: String) -> LogEntry? {
         let ns = raw as NSString
         guard let m = goLineRegex.firstMatch(in: raw, range: NSRange(location: 0, length: ns.length)),
@@ -108,14 +122,19 @@ final class ErrorLogger {
         let message = ns.substring(with: m.range(at: 5))
 
         // Собираем Date из компонентов в UTC (Go логирует в UTC).
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "UTC")!
+        let cal = utcCalendar
         let todayUTC = cal.dateComponents([.year, .month, .day], from: Date())
         var comps = DateComponents()
         comps.timeZone = TimeZone(identifier: "UTC")
         comps.year = todayUTC.year; comps.month = todayUTC.month; comps.day = todayUTC.day
         comps.hour = hh; comps.minute = mm; comps.second = ss
-        guard let date = cal.date(from: comps) else { return nil }
+        guard var date = cal.date(from: comps) else { return nil }
+
+        // UTC-полночь: если собранная дата оказалась в будущем больше чем на 5 мин,
+        // значит лог был записан в прошлые сутки — сдвигаем назад на 1 день.
+        if date > Date().addingTimeInterval(300) {
+            date = cal.date(byAdding: .day, value: -1, to: date) ?? date
+        }
 
         let displayTime = displayFmt.string(from: date)   // локальная TZ телефона
         let utcISO = isoFmt.string(from: date)
@@ -131,7 +150,7 @@ final class ErrorLogger {
     // MARK: – Ship
 
     func shipBatch() {
-        guard UserDefaults.standard.object(forKey: "telemetry_enabled") as? Bool ?? true else {
+        guard UserDefaults.standard.object(forKey: DefaultsKeys.telemetryEnabled) as? Bool ?? true else {
             lastShippedIndex = entries.count
             return
         }
@@ -185,17 +204,23 @@ final class ErrorLogger {
 
     private static let batchTTL: TimeInterval = 600 // 10 минут
 
-    private func pendingFiles() -> [URL] {
-        let all = ((try? FileManager.default.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil)) ?? [])
+    private func allBatchFiles() -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "json" }
             .sorted { $0.path < $1.path }
-        // Удаляем батчи старше TTL — нет смысла ретраить вечно.
+    }
+
+    private func pruneExpired() {
         let cutoff = Date().timeIntervalSince1970 - Self.batchTTL
-        return all.filter { url in
+        for url in allBatchFiles() {
             let ts = Double(url.deletingPathExtension().lastPathComponent.split(separator: "-").first ?? "") ?? 0
-            if ts > 0 && ts < cutoff { try? FileManager.default.removeItem(at: url); return false }
-            return true
+            if ts > 0 && ts < cutoff { try? FileManager.default.removeItem(at: url) }
         }
+    }
+
+    private func pendingFiles() -> [URL] {
+        pruneExpired()
+        return allBatchFiles()
     }
 
     private func startNetworkWatch() {

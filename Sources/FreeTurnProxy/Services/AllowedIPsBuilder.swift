@@ -85,27 +85,22 @@ enum AllowedIPsBuilder {
             throw BuildError.fetch
         }
         guard let text = String(data: data, encoding: .utf8) else { throw BuildError.fetch }
-
         let whitelist = parseCIDRs(text)
         guard !whitelist.isEmpty else { throw BuildError.empty }
-
-        var excludes = whitelist
-        excludes.append(contentsOf: localRanges.compactMap(parseCIDR))
-
-        let prefixes = complement(of: excludes)
-        guard !prefixes.isEmpty else { throw BuildError.empty }
-        return prefixes.joined(separator: ", ")
+        return try buildExcluding(whitelist)
     }
 
     private static func buildWithoutVK() async throws -> String {
         let vkCIDRStrings = await fetchVKCIDRs()
         let vkRanges = vkCIDRStrings.compactMap(parseCIDR)
         guard !vkRanges.isEmpty else { throw BuildError.empty }
+        return try buildExcluding(vkRanges)
+    }
 
-        var excludes = vkRanges
-        excludes.append(contentsOf: localRanges.compactMap(parseCIDR))
-
-        let prefixes = complement(of: excludes)
+    private static func buildExcluding(_ excludes: [IPRange]) throws -> String {
+        var all = excludes
+        all.append(contentsOf: localRanges.compactMap(parseCIDR))
+        let prefixes = complement(of: all)
         guard !prefixes.isEmpty else { throw BuildError.empty }
         return prefixes.joined(separator: ", ")
     }

@@ -20,9 +20,9 @@ final class ConfigStore: ObservableObject {
     @Published var pendingImport: SavedConfig?
 
     private let d: UserDefaults
-    private let configsKey = "savedConfigs.v1"
-    private let selectedKey = "savedConfigs.selected"
-    private let shakeHintKey = "shakeHintPending"
+    private let configsKey = DefaultsKeys.savedConfigs
+    private let selectedKey = DefaultsKeys.savedConfigsSelected
+    private let shakeHintKey = DefaultsKeys.shakeHintPending
 
     private init() {
         self.d = .standard

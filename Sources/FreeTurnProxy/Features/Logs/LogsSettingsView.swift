@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct LogsSettingsView: View {
-    @AppStorage("telemetry_enabled") private var telemetryEnabled = true
-    @AppStorage("persist_logs") private var persistLogs = false
+    @AppStorage(DefaultsKeys.telemetryEnabled) private var telemetryEnabled = true
+    @AppStorage(DefaultsKeys.persistLogs) private var persistLogs = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
