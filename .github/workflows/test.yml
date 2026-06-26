@@ -61,15 +61,20 @@ jobs:
       - name: Generate Xcode project
         run: make project
 
-      - name: Pick simulator
+      - name: Pick and boot simulator
         id: sim
         run: |
-          NAME=$(xcrun simctl list devices available --json \
+          INFO=$(xcrun simctl list devices available --json \
             | python3 -c "import sys,json; d=json.load(sys.stdin); \
-              found=[v[0]['name'] for k,v in d['devices'].items() if 'iOS' in k and v]; \
-              print(sorted(found, key=lambda n: ('iPhone' not in n, n))[0])")
-          echo "Picked simulator: $NAME"
+              found=[(v[0]['name'],v[0]['udid']) for k,v in d['devices'].items() if 'iOS' in k and v]; \
+              found.sort(key=lambda t: ('iPhone' not in t[0], t[0])); \
+              print(found[0][0]); print(found[0][1])")
+          NAME=$(echo "$INFO" | head -n1)
+          UDID=$(echo "$INFO" | tail -n1)
+          echo "Picked: $NAME ($UDID)"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
 
       # Один билд для обоих наборов тестов — затем test-without-building использует
       # общий derivedDataPath. Без этого xcodebuild test пересобирал бы app дважды.
