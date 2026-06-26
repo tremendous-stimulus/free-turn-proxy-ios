@@ -24,6 +24,7 @@ final class ProxyManager: ObservableObject {
     private var probeTimer: Timer?     // зонд живости туннеля (5s)
     private var lastLoggedError = ""
     private let audio = AudioKeepAlive()
+    private let mobile: MobileAPI
 
     private static let probeInterval: TimeInterval = 5
     private static let probeURL = URL(string: "http://captive.apple.com")!
@@ -36,7 +37,14 @@ final class ProxyManager: ObservableObject {
 
     var serverAddress: String { config?.peer ?? "" }
 
-    private init() {}
+    private init() {
+        self.mobile = LiveMobileAPI()
+    }
+
+    // Инжектируемый init — для тестов с MockMobileAPI.
+    init(mobile: MobileAPI) {
+        self.mobile = mobile
+    }
 
     func loadConfig(_ config: FreeTurnConfig, fileName: String) {
         self.config = config
@@ -52,10 +60,16 @@ final class ProxyManager: ObservableObject {
     func start() throws {
         guard let config else { throw AppError.noConfig }
         try audio.start()
-        MobileSetManualCaptcha(config.manualCaptcha)
-        var startError: NSError?
-        MobileStart(config.link, config.peer, config.dns ?? "", config.listen ?? "127.0.0.1:9000", config.transport, config.obfKey, "ios", &startError)
-        if let startError { throw startError }
+        mobile.setManualCaptcha(config.manualCaptcha)
+        try mobile.start(
+            link: config.link,
+            peer: config.peer,
+            dns: config.dns ?? "",
+            listen: config.listen ?? "127.0.0.1:9000",
+            transport: config.transport,
+            obfKey: config.obfKey,
+            clientType: "ios"
+        )
         isRunning = true
         let persistLogs = UserDefaults.standard.object(forKey: "persist_logs") as? Bool ?? false
         if persistLogs {
@@ -77,7 +91,7 @@ final class ProxyManager: ObservableObject {
         reconnectWork?.cancel()
         reconnectWork = nil
         isReconnecting = false
-        MobileStop()
+        mobile.stop()
         audio.stop()
         isRunning = false
         state = "idle"
@@ -102,20 +116,31 @@ final class ProxyManager: ObservableObject {
         isReconnecting = true
         state = "connecting"
         connectedStreams = 0
-        MobileStop()
+        mobile.stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, self.isRunning, let config = self.config else { return }
-            MobileSetManualCaptcha(config.manualCaptcha)
-            var err: NSError?
-            MobileStart(config.link, config.peer, config.dns ?? "", config.listen ?? "127.0.0.1:9000", config.transport, config.obfKey, "ios", &err)
-            if err != nil, retry > 0 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                    self?.performReconnect(retry: retry - 1)
+            self.mobile.setManualCaptcha(config.manualCaptcha)
+            do {
+                try self.mobile.start(
+                    link: config.link,
+                    peer: config.peer,
+                    dns: config.dns ?? "",
+                    listen: config.listen ?? "127.0.0.1:9000",
+                    transport: config.transport,
+                    obfKey: config.obfKey,
+                    clientType: "ios"
+                )
+                self.isReconnecting = false
+            } catch {
+                if retry > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                        self?.performReconnect(retry: retry - 1)
+                    }
+                } else {
+                    self.errorMessage = error.localizedDescription
+                    self.isReconnecting = false
                 }
-                return
             }
-            if let err { self.errorMessage = err.localizedDescription }
-            self.isReconnecting = false
         }
     }
 
@@ -124,7 +149,7 @@ final class ProxyManager: ObservableObject {
     private func startPolling() {
         statusTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self else { return }
-            let snap = MobileGetState()
+            let snap = self.mobile.getState()
             DispatchQueue.main.async {
                 if self.isReconnecting { return }
                 let st = snap?.state ?? "idle"
@@ -191,8 +216,9 @@ final class ProxyManager: ObservableObject {
     }
 
     private func startLogTimers() {
-        logPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-            ErrorLogger.shared.ingestGoLogs(MobileGetLogs())
+        logPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            ErrorLogger.shared.ingestGoLogs(self.mobile.getLogs())
         }
         logShipTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
             ErrorLogger.shared.shipBatch()

@@ -93,10 +93,10 @@ enum CaptchaBridge {
     // Go хранит только ссылку на протокол — держим презентер живым здесь.
     private static var presenter: CaptchaPresenterBridge?
 
-    static func register() {
+    static func register(mobile: MobileAPI = LiveMobileAPI()) {
         let p = CaptchaPresenterBridge()
         presenter = p
-        MobileSetCaptchaPresenter(p)
+        mobile.setCaptchaPresenter(p)
         CaptchaController.shared.registerNotifications()
     }
 }

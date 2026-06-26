@@ -1,10 +1,14 @@
 import Foundation
-import Mobile
 
 @MainActor
 final class LogsViewModel: ObservableObject {
     @Published var logs = ""
     private var timer: Timer?
+    private let mobile: MobileAPI
+
+    init(mobile: MobileAPI = LiveMobileAPI()) {
+        self.mobile = mobile
+    }
 
     func start() {
         refresh()
@@ -19,7 +23,7 @@ final class LogsViewModel: ObservableObject {
     }
 
     func clear() {
-        MobileClearLogs()
+        mobile.clearLogs()
         ErrorLogger.shared.clear()
         logs = ""
     }
