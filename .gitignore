@@ -2,3 +2,4 @@ Frameworks/
 FreeTurnProxy.xcodeproj/
 .framework-src/
 .DS_Store
+.claude

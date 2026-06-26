@@ -183,10 +183,19 @@ final class ErrorLogger {
         try? data.write(to: logsDir.appendingPathComponent(name))
     }
 
+    private static let batchTTL: TimeInterval = 600 // 10 минут
+
     private func pendingFiles() -> [URL] {
-        ((try? FileManager.default.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil)) ?? [])
+        let all = ((try? FileManager.default.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "json" }
             .sorted { $0.path < $1.path }
+        // Удаляем батчи старше TTL — нет смысла ретраить вечно.
+        let cutoff = Date().timeIntervalSince1970 - Self.batchTTL
+        return all.filter { url in
+            let ts = Double(url.deletingPathExtension().lastPathComponent.split(separator: "-").first ?? "") ?? 0
+            if ts > 0 && ts < cutoff { try? FileManager.default.removeItem(at: url); return false }
+            return true
+        }
     }
 
     private func startNetworkWatch() {
@@ -224,39 +233,31 @@ final class ErrorLogger {
         uploadQueue.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
+    // Загружаем файлы по одному — параллельная отправка перегружает мобильный канал
+    // и приводит к NSURLErrorNetworkConnectionLost (-1005).
     private func upload(files: [URL], completion: @escaping (Bool) -> Void) {
         guard let url = URL(string: Self.uploadURL) else { completion(false); return }
-        let group = DispatchGroup()
-        var anyFailed = false
-        for file in files {
-            group.enter()
-            guard let data = try? Data(contentsOf: file) else { group.leave(); continue }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = data
-            req.timeoutInterval = 10
-            URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
-                let status = (resp as? HTTPURLResponse)?.statusCode
-                if status == 200 {
-                    try? FileManager.default.removeItem(at: file)
-                } else {
-                    anyFailed = true
-                    let detail: String
-                    if let err {
-                        detail = err.localizedDescription
-                    } else if let data, let body = String(data: data, encoding: .utf8) {
-                        detail = "HTTP \(status ?? 0): \(body.prefix(200))"
-                    } else {
-                        detail = "HTTP \(status ?? 0)"
-                    }
-                    DispatchQueue.main.async { [weak self] in
-                        self?.appendAppLine(level: "ERR", message: "telemetry upload failed: \(detail)")
-                    }
-                }
-                self?.uploadQueue.async { group.leave() }
-            }.resume()
+        uploadNext(files: files[...], url: url, anyFailed: false, completion: completion)
+    }
+
+    private func uploadNext(files: ArraySlice<URL>, url: URL, anyFailed: Bool, completion: @escaping (Bool) -> Void) {
+        guard let file = files.first else { completion(anyFailed); return }
+        let rest = files.dropFirst()
+        guard let data = try? Data(contentsOf: file) else {
+            uploadNext(files: rest, url: url, anyFailed: anyFailed, completion: completion)
+            return
         }
-        group.notify(queue: uploadQueue) { completion(anyFailed) }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        req.timeoutInterval = 15
+        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+            let ok = (resp as? HTTPURLResponse)?.statusCode == 200
+            if ok { try? FileManager.default.removeItem(at: file) }
+            self?.uploadQueue.async {
+                self?.uploadNext(files: rest, url: url, anyFailed: anyFailed || !ok, completion: completion)
+            }
+        }.resume()
     }
 }
