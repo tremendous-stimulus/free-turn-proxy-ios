@@ -9,6 +9,7 @@ struct TunnelView: View {
     @State private var pendingDelete: SavedConfig?
     @State private var showUndo = false
     @State private var showImportPicker = false
+    @Environment(\.isBannerVisible) private var isBannerVisible
 
     var body: some View {
         NavigationStack {
@@ -24,7 +25,7 @@ struct TunnelView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Туннель")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(isBannerVisible ? .inline : .large)
             .alert("Ошибка", isPresented: .init(
                 get: { vm.errorText != nil },
                 set: { if !$0 { vm.errorText = nil } }
@@ -126,7 +127,7 @@ struct TunnelView: View {
         case "connecting": return "Подключение..."
         case "connected":  return "Подключено"
         case "captcha":    return "Нужно решить капчу"
-        case "error":      return "Ошибка. Проверьте логи"
+        case "error":      return "Ошибка. Проверьте логи: \(proxy.errorMessage)"
         default:           return "Не подключено"
         }
     }

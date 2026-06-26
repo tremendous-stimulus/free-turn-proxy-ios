@@ -57,7 +57,11 @@ final class TunnelViewModel: ObservableObject {
             // Сбрасываем токен только когда VK сам сказал, что он невалиден
             // (error_code 5 — User authorization failed). Сетевые сбои и
             // прочее не должны стирать сохранённый в Keychain токен.
-            if case VKCallError.apiError(5, _) = error { vkAuthToken = nil }
+            if case VKCallError.apiError(5, _) = error {
+                vkAuthToken = nil
+                showVKWebFallback = true  // токен протух — сразу открываем логин
+                return
+            }
             errorText = error.localizedDescription
         }
     }

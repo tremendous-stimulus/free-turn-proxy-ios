@@ -1,17 +1,21 @@
-# Go-исходники биндинга тянем из git, чтобы не зависеть от соседнего чекаута.
-# Переопределяемо (в т.ч. на локальный путь/форк во время разработки):
-#   make framework GO_REPO=/path/to/free-turn-proxy GO_REF=my-branch
-GO_REPO ?= https://github.com/tremendous-stimulus/free-turn-proxy
-GO_REF  ?= master
+# Go-исходники тянем из upstream репозитория библиотеки.
+# GO_REF фиксирует тег библиотеки — меняй осознанно при обновлении.
+# Переопределяемо для локальной разработки:
+#   make framework GO_REPO=/path/to/free-turn-proxy GO_REF=main
+GO_REPO ?= https://github.com/samosvalishe/free-turn-proxy
+GO_REF  ?= v1.5.2
 SRC_DIR := .framework-src
 
 .PHONY: framework project open clean all
 
-# 1. Собрать Go-фреймворк (нужен gomobile: go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init)
+# 1. Собрать Go-фреймворк (нужен gomobile + task: brew install go-task)
 framework:
 	rm -rf $(SRC_DIR)
 	git clone --depth 1 --branch $(GO_REF) $(GO_REPO) $(SRC_DIR)
-	$(SRC_DIR)/scripts/build-ios.sh "$(PWD)/Frameworks"
+	cd $(SRC_DIR) && task build:ios
+	rm -rf Frameworks/Mobile.xcframework
+	mkdir -p Frameworks
+	cp -R $(SRC_DIR)/dist/Mobile.xcframework Frameworks/
 	rm -rf $(SRC_DIR)
 
 # 2. Сгенерировать .xcodeproj (нужен xcodegen: brew install xcodegen)

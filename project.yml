@@ -27,7 +27,7 @@ targets:
         DEVELOPMENT_TEAM: T5LYQB4762
         CODE_SIGN_STYLE: Automatic
     dependencies:
-      - framework: Frameworks/Ios.xcframework
+      - framework: Frameworks/Mobile.xcframework
         embed: true
         codeSign: true
 
@@ -55,6 +55,6 @@ targets:
         DEVELOPMENT_TEAM: T5LYQB4762
         CODE_SIGN_STYLE: Automatic
     dependencies:
-      - framework: Frameworks/Ios.xcframework
+      - framework: Frameworks/Mobile.xcframework
         embed: true
         codeSign: true
