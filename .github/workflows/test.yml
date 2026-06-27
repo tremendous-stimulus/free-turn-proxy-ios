@@ -24,7 +24,7 @@ jobs:
           xcode-version: latest-stable
 
       # Запускаем boot симулятора как можно раньше — миграция данных при первом
-      # старте ~1.5 мин, параллельно идут setup-go, build framework, build-for-testing.
+      # старте ~1.5 мин, параллельно идут tooling, build framework, build-for-testing.
       - name: Start booting simulator
         id: sim
         run: |
@@ -38,31 +38,52 @@ jobs:
           echo "Picked: $NAME ($UDID)"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
-          # simctl boot — non-blocking. Boot закончится сам, мы дождёмся позже
-          # отдельным шагом, чтобы видеть в логе сколько он реально занял.
           xcrun simctl boot "$UDID" || true
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-          cache: false   # нет go.sum в корне — авто-кеш Go-модулей не нужен
-
-      - name: Install tools
+      # Версия upstream-фреймворка лежит в Makefile (GO_REF). Берём её оттуда,
+      # чтобы test.yml и release.yml шарили один кеш и реагировали на бамп.
+      - name: Read GO_REF
+        id: goref
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          brew install xcodegen go-task
+          REF=$(grep -E '^GO_REF[[:space:]]*\?=' Makefile | sed 's/.*= *//' | tr -d ' ')
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
-      # actions/cache@v4 сохраняет кеш только при успехе всей job — пока тесты
-      # падали, фреймворк не кешировался. Разделяем restore/save и сохраняем
-      # сразу после build с if: always(), чтобы кеш жил независимо от тестов.
+      # actions/cache@v4 сохраняет только при успехе всей job — пока тесты падали,
+      # фреймворк не кешировался. Разделяем restore/save: сохраняем сразу после
+      # build с if: always(), чтобы кеш жил независимо от тестов.
       - name: Restore Mobile.xcframework cache
         id: cache-fw
         uses: actions/cache/restore@v4
         with:
           path: Frameworks/Mobile.xcframework
-          key: mobile-xcframework-v1.5.2
+          key: mobile-xcframework-${{ steps.goref.outputs.ref }}
+
+      # xcodegen нужен всегда — для генерации .xcodeproj. brew без auto-update
+      # быстрее: индексы тянутся минуту, а у нас их и так не используем.
+      - name: Install xcodegen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+        run: brew install xcodegen
+
+      # Go + gomobile + go-task нужны только когда нужно пересобрать framework
+      # (cache miss). На cache hit пропускаем 3+ минуты setup-go и brew.
+      - name: Set up Go
+        if: steps.cache-fw.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Install gomobile + go-task
+        if: steps.cache-fw.outputs.cache-hit != 'true'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          brew install go-task
 
       - name: Build framework
         if: steps.cache-fw.outputs.cache-hit != 'true'
@@ -75,11 +96,10 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: Frameworks/Mobile.xcframework
-          key: mobile-xcframework-v1.5.2
+          key: mobile-xcframework-${{ steps.goref.outputs.ref }}
 
       # ModuleCache — прекомпилированные системные модули (SwiftUI, UIKit,
       # Foundation). Без него каждый build тратит ~60s на их перекомпиляцию.
-      # Ключ привязан к версии Xcode, т.к. кеш бьётся при апгрейде Xcode.
       - name: Cache Xcode ModuleCache
         uses: actions/cache@v4
         with:

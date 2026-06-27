@@ -38,22 +38,56 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      # Берём GO_REF из Makefile — кеш framework шарится с test.yml.
+      - name: Read GO_REF
+        id: goref
+        run: |
+          REF=$(grep -E '^GO_REF[[:space:]]*\?=' Makefile | sed 's/.*= *//' | tr -d ' ')
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Mobile.xcframework cache
+        id: cache-fw
+        uses: actions/cache/restore@v4
+        with:
+          path: Frameworks/Mobile.xcframework
+          key: mobile-xcframework-${{ steps.goref.outputs.ref }}
+
+      # xcodegen+jq нужны всегда. Go + gomobile + go-task — только при cache miss.
+      - name: Install xcodegen + jq
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+        run: brew install xcodegen jq
+
       - name: Set up Go
+        if: steps.cache-fw.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
+          cache: false
 
-      - name: Install tools
+      - name: Install gomobile + go-task
+        if: steps.cache-fw.outputs.cache-hit != 'true'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          brew install xcodegen jq go-task
-
-      - name: gomobile init
-        run: gomobile init
+          brew install go-task
 
       - name: Build framework
-        run: make framework
+        if: steps.cache-fw.outputs.cache-hit != 'true'
+        run: |
+          gomobile init
+          make framework
+
+      - name: Save Mobile.xcframework cache
+        if: always() && steps.cache-fw.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Frameworks/Mobile.xcframework
+          key: mobile-xcframework-${{ steps.goref.outputs.ref }}
 
       - name: Generate Xcode project
         run: make project
