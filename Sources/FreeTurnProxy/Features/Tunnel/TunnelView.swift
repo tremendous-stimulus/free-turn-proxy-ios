@@ -9,6 +9,7 @@ struct TunnelView: View {
     @State private var pendingDelete: SavedConfig?
     @State private var showUndo = false
     @State private var showImportPicker = false
+    @AppStorage(DefaultsKeys.autoReconnect) private var autoReconnect = true
     @Environment(\.isBannerVisible) private var isBannerVisible
 
     var body: some View {
@@ -272,6 +273,15 @@ struct TunnelView: View {
                 .controlSize(.large)
                 .tint(proxy.isRunning ? .red : .blue)
                 .disabled(!vm.canConnect && !proxy.isRunning)
+
+                Toggle(isOn: $autoReconnect) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Переподключаться при сбое").font(.subheadline)
+                        Text("Ретраи с бекоффом до 15с после потери соединения")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .tint(.blue)
             }
 
             if proxy.state == .connected {
