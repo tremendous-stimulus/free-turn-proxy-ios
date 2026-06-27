@@ -42,7 +42,7 @@ struct MainTabView: View {
 
                     TunnelView()
                         .tabItem { Label("Туннель", systemImage: "arrow.up.arrow.down") }
-                        .tag(0)
+                        .tag(UIState.tunnelTabTag)
 
                     NavigationStack {
                         ConfigView(isSelected: tab == 1)
@@ -63,6 +63,8 @@ struct MainTabView: View {
                     .tag(3)
                 }
                 .environment(\.isBannerVisible, isBannerVisible)
+                .onChange(of: tab) { newTab in UIState.currentTab = newTab }
+                .onAppear { UIState.currentTab = tab }
                 .onChange(of: store.pendingImport) { cfg in
                     if cfg != nil { tab = 0 }
                 }

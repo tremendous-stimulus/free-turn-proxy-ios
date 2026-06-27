@@ -34,7 +34,8 @@ final class CaptchaController: NSObject, ObservableObject {
             self.pendingURL = url
             withAnimation(.easeInOut(duration: 0.2)) { self.isPresented = true }
             // В фоне (интент/автопереподключение) пользователь не увидит попап —
-            // шлём пуш, по тапу вернёмся и откроем captcha.
+            // шлём пуш, по тапу вернёмся и откроем captcha. На любой вкладке
+            // попап рисуется поверх (ZStack в MainTabView), пуш не нужен.
             if UIApplication.shared.applicationState != .active {
                 self.postNeedsCaptchaNotification()
             }

@@ -1,5 +1,6 @@
 import Foundation
 import Mobile
+import UIKit
 import UserNotifications
 
 final class ProxyManager: ObservableObject {
@@ -42,8 +43,18 @@ final class ProxyManager: ObservableObject {
     private var everConnected = false
     private var autoReconnectAttempt = 0
     private var autoReconnectWork: DispatchWorkItem?
-    private var lostNotificationPosted = false
+    private var backoffTickTimer: Timer?
+    // Стартует на первом connected→error, гасится:
+    //   • на успешном переподключении (там же шлём «Подключение восстановлено»);
+    //   • на stop()/start();
+    //   • когда сами сдались (если когда-нибудь добавим limit).
+    private var inRetryCycle = false
     private let lostNotifID = "tunnel-lost"
+    private let recoveredNotifID = "tunnel-recovered"
+
+    // Сколько секунд осталось до следующей попытки реконнекта. Обновляется раз
+    // в секунду, чтобы UI мог показывать «Переподключаемся через X с».
+    @Published var retryBackoffSeconds: Int = 0
 
     var serverAddress: String { config?.peer ?? "" }
 
@@ -76,7 +87,10 @@ final class ProxyManager: ObservableObject {
         autoReconnectAttempt = 0
         autoReconnectWork?.cancel()
         autoReconnectWork = nil
-        lostNotificationPosted = false
+        backoffTickTimer?.invalidate()
+        backoffTickTimer = nil
+        retryBackoffSeconds = 0
+        inRetryCycle = false
         let persistLogs = UserDefaults.standard.object(forKey: DefaultsKeys.persistLogs) as? Bool ?? false
         if persistLogs {
             ErrorLogger.shared.resetGoPosition()
@@ -98,12 +112,15 @@ final class ProxyManager: ObservableObject {
         reconnectWork = nil
         autoReconnectWork?.cancel()
         autoReconnectWork = nil
+        backoffTickTimer?.invalidate()
+        backoffTickTimer = nil
+        retryBackoffSeconds = 0
         autoReconnectAttempt = 0
         everConnected = false
         isReconnecting = false
-        lostNotificationPosted = false
+        inRetryCycle = false
         UNUserNotificationCenter.current()
-            .removeDeliveredNotifications(withIdentifiers: [lostNotifID])
+            .removeDeliveredNotifications(withIdentifiers: [lostNotifID, recoveredNotifID])
         mobile.stop()
         audio.stop()
         isRunning = false
@@ -141,10 +158,6 @@ final class ProxyManager: ObservableObject {
 
     // MARK: – Авто-переподключение при обрыве туннеля
 
-    static func isAutoReconnectEnabled() -> Bool {
-        UserDefaults.standard.object(forKey: DefaultsKeys.autoReconnect) as? Bool ?? true
-    }
-
     // 1, 2, 4, 8, 15, 15, …
     private func autoReconnectDelay() -> TimeInterval {
         let capped = min(autoReconnectAttempt, 4)
@@ -155,7 +168,7 @@ final class ProxyManager: ObservableObject {
     private func triggerAutoReconnect() {
         guard isRunning, config != nil else { return }
         isReconnecting = true
-        state = .connecting
+        state = .retryBackoff
         connectedStreams = 0
         let delay = autoReconnectDelay()
         let n = autoReconnectAttempt + 1
@@ -164,14 +177,28 @@ final class ProxyManager: ObservableObject {
             message: "соединение прервано, переподключение через \(Int(delay))с (попытка \(n))"
         )
         autoReconnectAttempt = n
+        retryBackoffSeconds = Int(delay)
+        startBackoffTick()
         autoReconnectWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.performAutoReconnect() }
         autoReconnectWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
+    private func startBackoffTick() {
+        backoffTickTimer?.invalidate()
+        backoffTickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.retryBackoffSeconds > 0 { self.retryBackoffSeconds -= 1 }
+        }
+    }
+
     private func performAutoReconnect() {
         guard isRunning, config != nil else { return }
+        backoffTickTimer?.invalidate()
+        backoffTickTimer = nil
+        retryBackoffSeconds = 0
+        state = .connecting
         mobile.stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, self.isRunning, let config = self.config else { return }
@@ -180,31 +207,41 @@ final class ProxyManager: ObservableObject {
                 self.isReconnecting = false
             } catch {
                 // Старт сам бросил исключение — считаем как очередной фейл и
-                // ждём следующий бекофф (если автореконнект всё ещё включён).
+                // ждём следующий бекофф.
                 self.isReconnecting = false
-                if Self.isAutoReconnectEnabled() {
-                    self.triggerAutoReconnect()
-                } else {
-                    self.errorMessage = error.localizedDescription
-                    self.state = .error
-                    self.isRunning = false
-                    self.stopPolling()
-                    self.audio.stop()
-                }
+                self.triggerAutoReconnect()
             }
         }
     }
 
-    private func notifyConnectionLost() {
-        guard !lostNotificationPosted else { return }
-        lostNotificationPosted = true
+    // Пуши шлём только когда пользователь не смотрит вкладку «Туннель» в
+    // активном приложении — иначе UI и так показывает статус.
+    private func shouldPostStatusPush() -> Bool {
+        if UIApplication.shared.applicationState != .active { return true }
+        return UIState.currentTab != UIState.tunnelTabTag
+    }
+
+    private func postFailedNotification(afterConnected: Bool) {
+        guard shouldPostStatusPush() else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Подключение прервано"
-        content.body = Self.isAutoReconnectEnabled()
-            ? "Туннель оборвался, переподключаюсь автоматически."
-            : "Туннель оборвался. Откройте приложение, чтобы переподключиться."
+        content.title = "Ошибка подключения"
+        content.body = afterConnected
+            ? "Пытаемся подключиться повторно..."
+            : "Вернитесь в приложение чтобы попробовать подключиться повторно"
         content.sound = .default
         let req = UNNotificationRequest(identifier: lostNotifID, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req)
+    }
+
+    private func postRecoveredNotification() {
+        UNUserNotificationCenter.current()
+            .removeDeliveredNotifications(withIdentifiers: [lostNotifID])
+        guard shouldPostStatusPush() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Подключение восстановлено"
+        content.body = "Если связь не восстановится, попробуйте переподключиться к VPN"
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: recoveredNotifID, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
     }
 
@@ -253,7 +290,11 @@ final class ProxyManager: ObservableObject {
                 if st == .connected {
                     self.everConnected = true
                     self.autoReconnectAttempt = 0
-                    self.lostNotificationPosted = false
+                    // Вышли из цикла ретраев → шлём «восстановлено».
+                    if self.inRetryCycle {
+                        self.inRetryCycle = false
+                        self.postRecoveredNotification()
+                    }
                 }
 
                 // Пишем ошибку в единый буфер когда она появляется впервые.
@@ -266,19 +307,22 @@ final class ProxyManager: ObservableObject {
                 }
 
                 let active = (st == .connecting || st == .connected || st == .captcha)
-                // Авто-переподключение: туннель оборвался после успешного коннекта
-                // и пользователь не отключал тоггл «переподключаться при сбое».
-                let shouldAutoReconnect = (st == .error && self.everConnected && Self.isAutoReconnectEnabled())
+                // Авто-переподключение: туннель оборвался после успешного коннекта.
+                let shouldAutoReconnect = (st == .error && self.everConnected)
                 if shouldAutoReconnect {
-                    self.notifyConnectionLost()
+                    if !self.inRetryCycle {
+                        self.inRetryCycle = true
+                        self.postFailedNotification(afterConnected: true)
+                    }
                     self.triggerAutoReconnect()
                     return
                 }
                 self.isRunning = active
                 if !active {
-                    if st == .error && self.everConnected {
-                        // Авто-реконнект выключен — уведомление всё равно полезно.
-                        self.notifyConnectionLost()
+                    if st == .error && !self.everConnected {
+                        // Так и не подключились — гард на видимость UI стоит
+                        // внутри postFailedNotification.
+                        self.postFailedNotification(afterConnected: false)
                     }
                     ErrorLogger.shared.shipBatch()
                     self.stopPolling()

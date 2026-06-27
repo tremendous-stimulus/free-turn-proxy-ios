@@ -10,5 +10,4 @@ enum DefaultsKeys {
     static let savedConfigs = "savedConfigs.v1"
     static let savedConfigsSelected = "savedConfigs.selected"
     static let telemetryOnboarded = "telemetry_onboarded"
-    static let autoReconnect = "autoReconnect"
 }

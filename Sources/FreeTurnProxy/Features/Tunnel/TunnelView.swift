@@ -9,7 +9,6 @@ struct TunnelView: View {
     @State private var pendingDelete: SavedConfig?
     @State private var showUndo = false
     @State private var showImportPicker = false
-    @AppStorage(DefaultsKeys.autoReconnect) private var autoReconnect = true
     @Environment(\.isBannerVisible) private var isBannerVisible
 
     var body: some View {
@@ -108,11 +107,12 @@ struct TunnelView: View {
 
     private var statusColor: Color {
         switch proxy.state {
-        case .connected:  return .green
-        case .connecting: return .yellow
-        case .captcha:    return .yellow
-        case .error:      return .red
-        case .idle:       return Color.secondary.opacity(0.4)
+        case .connected:    return .green
+        case .connecting:   return .yellow
+        case .captcha:      return .yellow
+        case .retryBackoff: return .orange
+        case .error:        return .red
+        case .idle:         return Color.secondary.opacity(0.4)
         }
     }
 
@@ -121,7 +121,10 @@ struct TunnelView: View {
         case .connecting: return "Подключение..."
         case .connected:  return "Подключено"
         case .captcha:    return "Нужно решить капчу"
-        case .error:      return "Ошибка. Проверьте логи."
+        case .retryBackoff:
+            let s = proxy.retryBackoffSeconds
+            return s > 0 ? "Переподключаемся через \(s) с" : "Переподключаемся"
+        case .error:      return "Ошибка"
         case .idle:       return "Не подключено"
         }
     }
@@ -274,11 +277,6 @@ struct TunnelView: View {
                 .controlSize(.large)
                 .tint(proxy.isRunning ? .red : .blue)
                 .disabled(!vm.canConnect && !proxy.isRunning)
-
-                Toggle("Переподключаться при сбое", isOn: $autoReconnect)
-                    .font(.subheadline)
-                    .tint(.green)
-                    .disabled(proxy.isRunning)
             }
 
             if proxy.state == .connected {
