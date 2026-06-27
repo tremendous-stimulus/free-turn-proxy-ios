@@ -121,7 +121,7 @@ struct TunnelView: View {
         case .connecting: return "Подключение..."
         case .connected:  return "Подключено"
         case .captcha:    return "Нужно решить капчу"
-        case .error:      return "Ошибка. Проверьте логи: \(proxy.errorMessage)"
+        case .error:      return "Ошибка. Проверьте логи."
         case .idle:       return "Не подключено"
         }
     }
@@ -139,6 +139,7 @@ struct TunnelView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                    .disabled(proxy.isRunning)
                 if let e = vm.linkError {
                     FieldError(e)
                         .accessibilityElement(children: .combine)
@@ -155,7 +156,7 @@ struct TunnelView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
-            .disabled(vm.creatingCall)
+            .disabled(vm.creatingCall || proxy.isRunning)
             .sheet(isPresented: $vm.showVKWebFallback) {
                 VKAuthSheet { token in vm.onVKToken(token) }
             }
@@ -274,14 +275,10 @@ struct TunnelView: View {
                 .tint(proxy.isRunning ? .red : .blue)
                 .disabled(!vm.canConnect && !proxy.isRunning)
 
-                Toggle(isOn: $autoReconnect) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Переподключаться при сбое").font(.subheadline)
-                        Text("Ретраи с бекоффом до 15с после потери соединения")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .tint(.blue)
+                Toggle("Переподключаться при сбое", isOn: $autoReconnect)
+                    .font(.subheadline)
+                    .tint(.green)
+                    .disabled(proxy.isRunning)
             }
 
             if proxy.state == .connected {

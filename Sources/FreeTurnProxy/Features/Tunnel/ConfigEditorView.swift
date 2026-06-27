@@ -69,13 +69,13 @@ struct ConfigEditorView: View {
                                          placeholder: "127.0.0.1:9000 по умолчанию", text: $listen,
                                          keyboard: .asciiCapable, error: listenError)
 
-                            VStack(alignment: .leading, spacing: 4) {
-                                Toggle(isOn: $manualCaptcha) {
-                                    Label("Решать капчу вручную", systemImage: "checkmark.shield")
-                                        .font(.caption.bold())
-                                        .foregroundStyle(.secondary)
-                                }
+                            Toggle(isOn: $manualCaptcha) {
+                                Label("Решать капчу вручную", systemImage: "checkmark.shield")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
                             }
+                            .tint(.green)
+                            .padding(.trailing, 2)
                         }
                         .padding(.top, 8)
                     } label: {
