@@ -83,3 +83,31 @@ jobs:
         with:
           name: test-results
           path: TestResults.xcresult
+
+  # Прогоняем релизную сборку app-таргета на каждом PR — чтобы поймать ломающие
+  # релиз изменения (например тест-таргет втянулся в Release-конфигурацию)
+  # ДО того как мы запушим тег и release.yml упадёт с уже залитым тегом.
+  release-build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: ./.github/actions/build-mobile-framework
+
+      - uses: ./.github/actions/install-xcode-tools
+        with:
+          packages: xcodegen
+
+      - run: make project
+
+      - name: Build unsigned app (Release)
+        run: |
+          xcodebuild -scheme FreeTurnProxy -configuration Release -sdk iphoneos \
+            -derivedDataPath build \
+            -archivePath build/FreeTurnProxy.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            archive
