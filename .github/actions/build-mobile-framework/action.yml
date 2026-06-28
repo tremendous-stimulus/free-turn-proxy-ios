@@ -1,0 +1,45 @@
+name: Build mobile framework + cache
+description: >
+  Собирает Frameworks/Mobile.xcframework через Go+gomobile, с кешем по hash(Makefile).
+  На cache hit три внутренних шага пропускаются. На cache miss ставит Go+gomobile+
+  go-task, собирает фреймворк и сохраняет в кеш сразу после сборки — даже если
+  последующие шаги job упадут.
+
+runs:
+  using: composite
+  steps:
+    - name: Restore cache
+      id: cache-fw
+      uses: actions/cache/restore@v4
+      with:
+        path: Frameworks/Mobile.xcframework
+        key: mobile-xcframework-${{ hashFiles('Makefile') }}
+
+    - name: Set up Go
+      if: steps.cache-fw.outputs.cache-hit != 'true'
+      uses: actions/setup-go@v5
+      with:
+        go-version: 'stable'
+        cache: false
+
+    - name: Build framework
+      if: steps.cache-fw.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+      run: |
+        brew install go-task
+        go install golang.org/x/mobile/cmd/gomobile@latest
+        export PATH="$(go env GOPATH)/bin:$PATH"
+        gomobile init
+        make framework
+
+    # if: always() — сохраняем фреймворк сразу после сборки, чтобы падение
+    # тестов/релиза ниже по job не сожрало 5-7 минут пересбора в следующий ран.
+    - name: Save cache
+      if: always() && steps.cache-fw.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: Frameworks/Mobile.xcframework
+        key: mobile-xcframework-${{ hashFiles('Makefile') }}

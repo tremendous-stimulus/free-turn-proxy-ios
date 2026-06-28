@@ -1,0 +1,49 @@
+name: Install Xcode CLI tools + cache
+description: >
+  brew install заданных пакетов, с кешем установленных бандлов в /opt/homebrew/Cellar.
+  brew install запускается ВСЕГДА (а не только на cache miss): на cache hit бутыли
+  уже в Cellar, brew просто пересоздаёт симлинки в /opt/homebrew/bin — занимает секунды.
+
+inputs:
+  packages:
+    description: "Список brew-пакетов через пробел (например, 'xcodegen xcbeautify')"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Compute cache key
+      id: key
+      shell: bash
+      run: echo "v=$(echo '${{ inputs.packages }}' | tr ' ' '-' | tr -s '-')" >> "$GITHUB_OUTPUT"
+
+    - name: Restore cache
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        # Перечисляем пути под все возможные пакеты — несуществующие в Cellar
+        # actions/cache просто проигнорирует. Когда понадобится новый пакет —
+        # добавляем сюда строку.
+        path: |
+          /opt/homebrew/Cellar/xcodegen
+          /opt/homebrew/Cellar/xcbeautify
+          /opt/homebrew/Cellar/jq
+        key: brew-${{ steps.key.outputs.v }}-v1
+
+    - name: brew install
+      shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+      run: brew install ${{ inputs.packages }}
+
+    # if: always() — сохраняем кеш даже если последующие шаги job упадут.
+    - name: Save cache
+      if: always() && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          /opt/homebrew/Cellar/xcodegen
+          /opt/homebrew/Cellar/xcbeautify
+          /opt/homebrew/Cellar/jq
+        key: brew-${{ steps.key.outputs.v }}-v1
