@@ -61,7 +61,7 @@ jobs:
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             ONLY_ACTIVE_ARCH=YES \
-            | xcbeautify --report junit --report-path build/reports/junit.xml --renderer github-actions
+            | xcbeautify --report junit --report-path build/reports --renderer github-actions
 
       # if: always() — рендерим даже если тесты упали (как раз тогда это и нужно).
       - name: Publish test results
