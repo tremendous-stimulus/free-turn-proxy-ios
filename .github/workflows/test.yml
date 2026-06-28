@@ -43,7 +43,7 @@ jobs:
           mkdir -p build/reports
           xcodebuild test \
             -scheme FreeTurnProxy \
-            -destination "platform=iOS Simulator,name=iPhone 16" \
+            -destination "platform=iOS Simulator,name=iPhone 17" \
             -derivedDataPath DerivedData \
             -resultBundlePath TestResults.xcresult \
             -skipPackagePluginValidation \
