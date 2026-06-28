@@ -54,7 +54,10 @@ jobs:
 
       - name: Build unsigned app
         run: |
-          xcodebuild -scheme FreeTurnProxy -configuration Release -sdk iphoneos \
+          # -target вместо -scheme: scheme включает test-таргеты, которые ломают
+          # Release-сборку (@testable import не резолвится без ENABLE_TESTABILITY).
+          # IPA не нужен test-bundles — собираем только app-таргет напрямую.
+          xcodebuild -target FreeTurnProxy -configuration Release -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 
