@@ -107,12 +107,10 @@ struct TunnelView: View {
 
     private var statusColor: Color {
         switch proxy.state {
-        case .connected:    return .green
-        case .connecting:   return .yellow
-        case .captcha:      return .yellow
-        case .retryBackoff: return .orange
-        case .error:        return .red
-        case .idle:         return Color.secondary.opacity(0.4)
+        case .connected:                             return .green
+        case .connecting, .captcha, .retryBackoff:   return .yellow
+        case .error:                                 return .red
+        case .idle:                                  return .secondary.opacity(0.4)
         }
     }
 
@@ -123,7 +121,7 @@ struct TunnelView: View {
         case .captcha:    return "Нужно решить капчу"
         case .retryBackoff:
             let s = proxy.retryBackoffSeconds
-            return s > 0 ? "Переподключаемся через \(s) с" : "Переподключаемся"
+            return "Переподключаемся через \(s > 1 ? s : 1) с" // чтобы на нуле не фликерило
         case .error:      return "Ошибка"
         case .idle:       return "Не подключено"
         }

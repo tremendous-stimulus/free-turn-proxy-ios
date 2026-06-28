@@ -31,21 +31,23 @@ final class ProxyManager: ObservableObject {
     private static let probeInterval: TimeInterval = 5
     private static let probeURL = URL(string: "http://captive.apple.com")!
 
-    // Переподключение при смене сети (LTE↔Wi-Fi). isReconnecting замораживает
-    // поллинг, чтобы промежуточный idle между Stop и Start не уронил туннель.
+    // Реконнект-цикл стартует из трёх мест, все идут через enterRetryCycle():
+    //   • Go выдал error из connected (Snapshot.State из поллинга);
+    //   • healthcheck-зонд (captive.apple.com) провалился;
+    //   • сменилась сеть (LTE↔Wi-Fi через NetworkMonitor).
+    // isReconnecting замораживает поллинг между mobile.stop() и mobile.start(),
+    // чтобы промежуточный idle Go-стейта не уронил туннель в .idle.
     private let network = NetworkMonitor()
-    private var reconnectWork: DispatchWorkItem?
     private var isReconnecting = false
 
-    // Авто-переподключение при обрыве уже установленного туннеля
-    // (connected → error). Срабатывает только если в течение сессии хотя бы раз
-    // дошли до connected — connecting→error не ретраит.
+    // Срабатывает только если в течение сессии хотя бы раз дошли до connected —
+    // connecting→error не ретраит (это первичный провал коннекта, не реконнект).
     private var everConnected = false
     private var autoReconnectAttempt = 0
     private var autoReconnectWork: DispatchWorkItem?
     private var backoffTickTimer: Timer?
-    // Стартует на первом connected→error, гасится:
-    //   • на успешном переподключении (там же шлём «Подключение восстановлено»);
+    // Стартует на первом входе в retry-цикл из connected, гасится:
+    //   • на успешном переподключении (там же шлём «Переподключились»);
     //   • на stop()/start();
     //   • когда сами сдались (если когда-нибудь добавим limit).
     private var inRetryCycle = false
@@ -100,7 +102,11 @@ final class ProxyManager: ObservableObject {
         startPolling()
         startActiveTimers()
         network.onChange = { [weak self] in
-            DispatchQueue.main.async { self?.scheduleReconnect() }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                ErrorLogger.shared.appendAppLine(level: "WRN", message: "сетевая среда изменилась")
+                self.enterRetryCycle()
+            }
         }
         network.start()
     }
@@ -108,8 +114,6 @@ final class ProxyManager: ObservableObject {
     func stop() {
         ErrorLogger.shared.shipBatch()
         network.stop()
-        reconnectWork?.cancel()
-        reconnectWork = nil
         autoReconnectWork?.cancel()
         autoReconnectWork = nil
         backoffTickTimer?.invalidate()
@@ -146,14 +150,21 @@ final class ProxyManager: ObservableObject {
         )
     }
 
-    // MARK: – Переподключение при смене сети
+    // MARK: – Унифицированный вход в retry-цикл
 
-    private func scheduleReconnect() {
-        guard isRunning, config != nil else { return }
-        reconnectWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.performReconnect() }
-        reconnectWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+    // Единая точка входа для всех источников «связь с туннелем потеряна»:
+    // ошибка из Go (connected→error), провал healthcheck-зонда, смена сети.
+    // Гард на everConnected: до первого успешного коннекта реконнект не делаем —
+    // там работает свой 15с-watchdog Go, и пуш «Переподключаемся» был бы ложью.
+    // Гард на isReconnecting: если уже в backoff/restart-фазе, повторный триггер
+    // (например, ещё одна смена сети) не должен сбрасывать счётчик попыток.
+    private func enterRetryCycle() {
+        guard isRunning, config != nil, everConnected, !isReconnecting else { return }
+        if !inRetryCycle {
+            inRetryCycle = true
+            postReconnectingNotification()
+        }
+        triggerAutoReconnect()
     }
 
     // MARK: – Авто-переподключение при обрыве туннеля
@@ -221,13 +232,27 @@ final class ProxyManager: ObservableObject {
         return UIState.currentTab != UIState.tunnelTabTag
     }
 
-    private func postFailedNotification(afterConnected: Bool) {
+    // Пуш при входе в retry-цикл из connected. Текст нейтральный (без слова
+    // «ошибка») потому что снаружи это выглядит как восстановимая пауза, а не
+    // фейл — туннель сам поднимется. Отдельная функция от
+    // postInitialConnectFailureNotification, чтобы тексты не путались.
+    private func postReconnectingNotification() {
+        guard shouldPostStatusPush() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Переподключаемся"
+        content.body = "Восстанавливаем туннель"
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: lostNotifID, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req)
+    }
+
+    // Пуш на путь idle→connecting→error (ни разу не подключились). Здесь слово
+    // «ошибка» уместно: пользователь явно жал «Подключиться» и оно не удалось.
+    private func postInitialConnectFailureNotification() {
         guard shouldPostStatusPush() else { return }
         let content = UNMutableNotificationContent()
         content.title = "Ошибка подключения"
-        content.body = afterConnected
-            ? "Пытаемся подключиться повторно..."
-            : "Вернитесь в приложение чтобы попробовать подключиться повторно"
+        content.body = "Вернитесь в приложение чтобы попробовать подключиться повторно"
         content.sound = .default
         let req = UNNotificationRequest(identifier: lostNotifID, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
@@ -238,35 +263,11 @@ final class ProxyManager: ObservableObject {
             .removeDeliveredNotifications(withIdentifiers: [lostNotifID])
         guard shouldPostStatusPush() else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Подключение восстановлено"
-        content.body = "Если связь не восстановится, попробуйте переподключиться к VPN"
+        content.title = "Переподключились"
+        content.body = "Туннель снова доступен"
         content.sound = .default
         let req = UNNotificationRequest(identifier: recoveredNotifID, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
-    }
-
-    private func performReconnect(retry: Int = 1) {
-        guard isRunning, config != nil else { return }
-        isReconnecting = true
-        state = .connecting
-        connectedStreams = 0
-        mobile.stop()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self, self.isRunning, let config = self.config else { return }
-            do {
-                try self.startMobile(config)
-                self.isReconnecting = false
-            } catch {
-                if retry > 0 {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                        self?.performReconnect(retry: retry - 1)
-                    }
-                } else {
-                    self.errorMessage = error.localizedDescription
-                    self.isReconnecting = false
-                }
-            }
-        }
     }
 
     // MARK: – Polling
@@ -307,22 +308,17 @@ final class ProxyManager: ObservableObject {
                 }
 
                 let active = (st == .connecting || st == .connected || st == .captcha)
-                // Авто-переподключение: туннель оборвался после успешного коннекта.
-                let shouldAutoReconnect = (st == .error && self.everConnected)
-                if shouldAutoReconnect {
-                    if !self.inRetryCycle {
-                        self.inRetryCycle = true
-                        self.postFailedNotification(afterConnected: true)
-                    }
-                    self.triggerAutoReconnect()
+                // Туннель оборвался после успешного коннекта — в retry-цикл.
+                if st == .error && self.everConnected {
+                    self.enterRetryCycle()
                     return
                 }
                 self.isRunning = active
                 if !active {
                     if st == .error && !self.everConnected {
-                        // Так и не подключились — гард на видимость UI стоит
-                        // внутри postFailedNotification.
-                        self.postFailedNotification(afterConnected: false)
+                        // Так и не подключились — пуш с гардом видимости UI
+                        // внутри postInitialConnectFailureNotification.
+                        self.postInitialConnectFailureNotification()
                     }
                     ErrorLogger.shared.shipBatch()
                     self.stopPolling()
@@ -359,7 +355,7 @@ final class ProxyManager: ObservableObject {
                 if let error {
                     ErrorLogger.shared.appendAppLine(level: "WRN",
                         message: "tunnel probe failed: \(error.localizedDescription)")
-                    self.scheduleReconnect()
+                    self.enterRetryCycle()
                 }
             }
         }.resume()
