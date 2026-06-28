@@ -98,8 +98,11 @@ schemes:
     build:
       targets:
         FreeTurnProxy: all
-        FreeTurnProxyTests: test
-        FreeTurnProxyUITests: test
+        # Тест-таргеты НЕ перечисляем здесь — xcodegen добавит их в BuildAction
+        # автоматически через test.targets ниже, и поставит buildForTesting=YES,
+        # остальные флаги в NO. Если указать их явно как `test`, Xcode всё равно
+        # тянет их в Release archive — потому что archive игнорирует
+        # buildForArchiving=NO для перечисленных таргетов.
     test:
       targets:
         - FreeTurnProxyTests
