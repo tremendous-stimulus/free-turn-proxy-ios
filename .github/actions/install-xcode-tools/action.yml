@@ -30,12 +30,19 @@ runs:
           /opt/homebrew/Cellar/jq
         key: brew-${{ steps.key.outputs.v }}-v1
 
+    # brew install + явный link. На cache hit бутыли уже в Cellar, brew install
+    # просто говорит "already installed, just not linked" и НЕ создаёт симлинки
+    # в /opt/homebrew/bin — нужен явный link --overwrite, иначе бинарей нет в PATH.
     - name: brew install
       shell: bash
       env:
         HOMEBREW_NO_AUTO_UPDATE: "1"
         HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
-      run: brew install ${{ inputs.packages }}
+      run: |
+        brew install ${{ inputs.packages }}
+        for pkg in ${{ inputs.packages }}; do
+          brew link --overwrite "$pkg"
+        done
 
     # if: always() — сохраняем кеш даже если последующие шаги job упадут.
     - name: Save cache

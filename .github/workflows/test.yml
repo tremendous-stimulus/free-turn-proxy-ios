@@ -37,13 +37,24 @@ jobs:
 
       - run: make project
 
+      # На раннере доступный iPhone-симулятор зависит от Xcode (например, на
+      # Xcode 26 RC2 нет iPhone 16, есть 17). Берём первый iPhone из списка —
+      # не привязываемся к модели, лишь бы был iOS Simulator.
+      - name: Pick iPhone simulator
+        id: sim
+        run: |
+          NAME=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | startswith("iPhone"))] | first | .name')
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Picked: $NAME"
+
       - name: Run tests
         run: |
           set -o pipefail
           mkdir -p build/reports
           xcodebuild test \
             -scheme FreeTurnProxy \
-            -destination "platform=iOS Simulator,name=iPhone 17" \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
             -derivedDataPath DerivedData \
             -resultBundlePath TestResults.xcresult \
             -skipPackagePluginValidation \
