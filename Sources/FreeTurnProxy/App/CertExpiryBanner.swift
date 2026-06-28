@@ -5,7 +5,7 @@ struct CertExpiryBanner: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Приложение скоро перестанет работать — осталось меньше \(daysLeft) \(dayWord)", systemImage: "exclamationmark.triangle.fill")
+            Label("Приложение скоро перестанет работать — осталось меньше \(daysLeft) \(Self.dayWord(forDays: daysLeft))", systemImage: "exclamationmark.triangle.fill")
                 .font(.subheadline.bold())
                 .foregroundStyle(.white)
 
@@ -19,7 +19,7 @@ struct CertExpiryBanner: View {
         .background(daysLeft <= 2 ? Color.red : Color.orange)
     }
 
-    private var dayWord: String {
+    static func dayWord(forDays daysLeft: Int) -> String {
         switch daysLeft % 10 {
         case 1 where daysLeft % 100 != 11: return "дня"
         default: return "дней"

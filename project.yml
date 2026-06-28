@@ -58,3 +58,68 @@ targets:
       - framework: Frameworks/Mobile.xcframework
         embed: true
         codeSign: true
+
+  # Регресс-тесты (XCTest). Хост — основное приложение. Не подписываются
+  # (CODE_SIGNING_ALLOWED=NO) — гоняются на симуляторе.
+  FreeTurnProxyTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/FreeTurnProxyTests
+    dependencies:
+      - target: FreeTurnProxy
+      - framework: Frameworks/Mobile.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.freeturn.proxy.tests
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGNING_ALLOWED: "NO"
+
+  FreeTurnProxyUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests/FreeTurnProxyUITests
+    dependencies:
+      - target: FreeTurnProxy
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.freeturn.proxy.uitests
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        CODE_SIGNING_ALLOWED: "NO"
+
+schemes:
+  FreeTurnProxy:
+    build:
+      targets:
+        FreeTurnProxy: all
+        FreeTurnProxyTests: test
+        FreeTurnProxyUITests: test
+    test:
+      targets:
+        - FreeTurnProxyTests
+        - FreeTurnProxyUITests
+      # Без LLDB: на Xcode 26 RC2 debugger version store падает с ошибкой и ретраит
+      # перед каждым тестом — добавляет 30s–3 мин висения. CI debugger не нужен.
+      debugEnabled: false
+      # Coverage инструментирует код при сборке → +20–30s на билд. Включим, когда
+      # понадобится отчёт; пока CI только зелёный/красный.
+      gatherCoverageData: false
+    run:
+      config: Debug
+    archive:
+      config: Release
+
+  FreeTurnProxyTest:
+    build:
+      targets:
+        FreeTurnProxyTest: all
+    run:
+      config: Debug
+    archive:
+      config: Release

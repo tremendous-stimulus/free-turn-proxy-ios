@@ -22,7 +22,7 @@ enum TunnelController {
     }
 
     static var link: String {
-        UserDefaults.standard.string(forKey: "manualLink")?
+        UserDefaults.standard.string(forKey: DefaultsKeys.manualLink)?
             .trimmingCharacters(in: .whitespaces) ?? ""
     }
 
@@ -57,33 +57,33 @@ enum TunnelController {
         ProxyManager.shared.stop()
     }
 
-    // Ждём пока state не станет "connected"; на "error" — бросаем ошибку.
+    // Ждём пока state не станет .connected; на .error — бросаем ошибку.
     static func waitUntilConnected(timeout: TimeInterval = 60) async throws {
         var deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             let proxy = ProxyManager.shared
-            if proxy.state == "connected" { return }
-            if proxy.state == "error" {
+            if proxy.state == .connected { return }
+            if proxy.state == .error {
                 throw TunnelError.connectFailed(
                     proxy.errorMessage.isEmpty ? "Ошибка подключения" : proxy.errorMessage)
             }
             // Пока пользователь решает captcha — не тратим бюджет ожидания, чтобы
             // интент продолжал работать до подключения или ошибки.
-            if proxy.state == "captcha" {
+            if proxy.state == .captcha {
                 deadline = Date().addingTimeInterval(timeout)
             }
-            try await Task.sleep(nanoseconds: 300_000_000)
+            try await Task.sleep(for: .milliseconds(300))
         }
         throw TunnelError.timedOut
     }
 
-    // Ждём пока туннель не погаснет (state пустой/idle, прокси не запущен).
+    // Ждём пока туннель не погаснет (state == .idle, прокси не запущен).
     static func waitUntilDisconnected(timeout: TimeInterval = 30) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             let proxy = ProxyManager.shared
-            if !proxy.isRunning || proxy.state.isEmpty || proxy.state == "idle" { return }
-            try await Task.sleep(nanoseconds: 300_000_000)
+            if !proxy.isRunning || proxy.state == .idle { return }
+            try await Task.sleep(for: .milliseconds(300))
         }
         throw TunnelError.timedOut
     }

@@ -56,8 +56,7 @@ enum ConfigCodec {
             listen: t(dto.listen),
             transport: (transport == "udp" || transport == "tcp") ? transport : "udp"
         )
-        let loadedSomething = !cfg.name.isEmpty || !cfg.peer.isEmpty || !cfg.obfKey.isEmpty
-            || !cfg.dns.isEmpty || !cfg.listen.isEmpty
+        let loadedSomething = ![cfg.name, cfg.peer, cfg.obfKey, cfg.dns, cfg.listen].allSatisfy(\.isEmpty)
         guard loadedSomething else { throw ConfigCodecError.unreadable }
         return cfg
     }

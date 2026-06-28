@@ -4,21 +4,30 @@ struct MainTabView: View {
     @ObservedObject private var store = ConfigStore.shared
     @ObservedObject private var captcha = CaptchaController.shared
     @State private var tab = 0
-    @AppStorage("telemetry_onboarded") private var onboarded = false
+    @AppStorage(DefaultsKeys.telemetryOnboarded) private var onboarded = false
     @State private var certDaysLeft: Int?
     @State private var availableUpdate: String?
 
     private static let warnThreshold = 3
 
-    private var isBannerVisible: Bool {
-        (certDaysLeft.map { $0 <= Self.warnThreshold } ?? false) || availableUpdate != nil
+    private enum ActiveBanner {
+        case cert(Int)
+        case update(String)
     }
 
+    private var activeBannerKind: ActiveBanner? {
+        if let days = certDaysLeft, days <= Self.warnThreshold { return .cert(days) }
+        if let version = availableUpdate { return .update(version) }
+        return nil
+    }
+
+    private var isBannerVisible: Bool { activeBannerKind != nil }
+
     @ViewBuilder private var activeBanner: some View {
-        if let days = certDaysLeft, days <= Self.warnThreshold {
-            CertExpiryBanner(daysLeft: days)
-        } else if let version = availableUpdate {
-            UpdateBanner(latestVersion: version)
+        switch activeBannerKind {
+        case .cert(let days): CertExpiryBanner(daysLeft: days)
+        case .update(let version): UpdateBanner(latestVersion: version)
+        case nil: EmptyView()
         }
     }
 
@@ -33,7 +42,7 @@ struct MainTabView: View {
 
                     TunnelView()
                         .tabItem { Label("Туннель", systemImage: "arrow.up.arrow.down") }
-                        .tag(0)
+                        .tag(UIState.tunnelTabTag)
 
                     NavigationStack {
                         ConfigView(isSelected: tab == 1)
@@ -54,6 +63,8 @@ struct MainTabView: View {
                     .tag(3)
                 }
                 .environment(\.isBannerVisible, isBannerVisible)
+                .onChange(of: tab) { newTab in UIState.currentTab = newTab }
+                .onAppear { UIState.currentTab = tab }
                 .onChange(of: store.pendingImport) { cfg in
                     if cfg != nil { tab = 0 }
                 }

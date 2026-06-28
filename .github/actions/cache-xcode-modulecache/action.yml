@@ -1,0 +1,25 @@
+name: Cache Xcode module cache
+description: >
+  Кеширует прекомпиленные системные модули Xcode (SwiftUI/UIKit/Foundation) из
+  ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex. Экономит ~30-60с на
+  каждом xcodebuild. Ключ привязан к версии Xcode — при апдейте раннер-имеджа
+  кеш одноразово инвалидируется и пересобирается.
+
+  Используем unified actions/cache@v4 (а не split restore/save), т.к. здесь нет
+  conditional build-шага: ModuleCache наполняется как side-effect xcodebuild.
+  На job failure кеш не сохранится — но это окей, пересбор ~60с.
+
+runs:
+  using: composite
+  steps:
+    - name: Compute cache key
+      id: key
+      shell: bash
+      run: |
+        v=$(xcodebuild -version 2>/dev/null | head -n1 | awk '{print $2}')
+        echo "v=$v" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v4
+      with:
+        path: ~/Library/Developer/Xcode/DerivedData/ModuleCache.noindex
+        key: xcode-modulecache-${{ runner.os }}-xcode${{ steps.key.outputs.v }}

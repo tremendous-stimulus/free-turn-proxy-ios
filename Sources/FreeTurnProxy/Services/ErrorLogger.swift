@@ -8,13 +8,12 @@ final class ErrorLogger {
 
     static let uploadURL = "https://telemetry.free-turn-proxy-ios.workers.dev/"
 
-    let sessionTag: String = UUID().uuidString.prefix(8).lowercased().description
+    let sessionTag: String = String(UUID().uuidString.prefix(8).lowercased())
 
     static let clientId: String = {
-        let key = "error_logger_client_id"
-        if let v = UserDefaults.standard.string(forKey: key) { return v }
-        let new = UUID().uuidString.prefix(8).lowercased().description
-        UserDefaults.standard.set(new, forKey: key)
+        if let v = UserDefaults.standard.string(forKey: DefaultsKeys.errorLoggerClientId) { return v }
+        let new = String(UUID().uuidString.prefix(8).lowercased())
+        UserDefaults.standard.set(new, forKey: DefaultsKeys.errorLoggerClientId)
         return new
     }()
 
@@ -33,6 +32,11 @@ final class ErrorLogger {
     private var lastGoLogLength = 0
     private var lastShippedIndex = 0
 
+    // Кэп буфера держим скромным: при типичной нагрузке Go-биндинг шлёт логи
+    // десятками в секунду, лимит — это аварийный потолок, чтобы при долгом
+    // отсутствии сети/телеметрии буфер не разъедал память. 10к × ~250 байт ≈ 2.5 МБ.
+    static let maxEntries = 10_000
+
     var displayLogs: String { entries.map(\.display).joined(separator: "\n") }
 
     // MARK: – Ingestion
@@ -49,6 +53,7 @@ final class ErrorLogger {
 
         let parsed = rawLines.compactMap(Self.parseGoLine)
         entries.append(contentsOf: parsed)
+        enforceMaxEntries()
     }
 
     // App-level события.
@@ -57,6 +62,18 @@ final class ErrorLogger {
         let display = "\(Self.displayFmt.string(from: now)) [\(level)] [App] \(message)"
         let utcISO = Self.isoFmt.string(from: now)
         entries.append(LogEntry(display: display, utcISO: utcISO, level: level, message: "[App] \(message)"))
+        enforceMaxEntries()
+    }
+
+    // Срезает голову буфера до maxEntries и корректирует lastShippedIndex на
+    // ту же величину — иначе после ужима индекс «уходит» в правую часть
+    // массива и при следующем shipBatch мы пропустим только что добавленные
+    // строки (dropFirst(lastShippedIndex) даст пустой слайс).
+    private func enforceMaxEntries() {
+        guard entries.count > Self.maxEntries else { return }
+        let overflow = entries.count - Self.maxEntries
+        entries.removeFirst(overflow)
+        lastShippedIndex = max(0, lastShippedIndex - overflow)
     }
 
     func resetGoPosition() { lastGoLogLength = 0 }
@@ -96,7 +113,14 @@ final class ErrorLogger {
         return f
     }()
 
-    private static func parseGoLine(_ raw: String) -> LogEntry? {
+    // Кешируем Calendar — создание Calendar затратно, но todayUTC вычисляется свежим при каждом вызове.
+    private static let utcCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal
+    }()
+
+    static func parseGoLine(_ raw: String) -> LogEntry? {
         let ns = raw as NSString
         guard let m = goLineRegex.firstMatch(in: raw, range: NSRange(location: 0, length: ns.length)),
               m.numberOfRanges == 6 else { return nil }
@@ -108,14 +132,19 @@ final class ErrorLogger {
         let message = ns.substring(with: m.range(at: 5))
 
         // Собираем Date из компонентов в UTC (Go логирует в UTC).
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "UTC")!
+        let cal = utcCalendar
         let todayUTC = cal.dateComponents([.year, .month, .day], from: Date())
         var comps = DateComponents()
         comps.timeZone = TimeZone(identifier: "UTC")
         comps.year = todayUTC.year; comps.month = todayUTC.month; comps.day = todayUTC.day
         comps.hour = hh; comps.minute = mm; comps.second = ss
-        guard let date = cal.date(from: comps) else { return nil }
+        guard var date = cal.date(from: comps) else { return nil }
+
+        // UTC-полночь: если собранная дата оказалась в будущем больше чем на 5 мин,
+        // значит лог был записан в прошлые сутки — сдвигаем назад на 1 день.
+        if date > Date().addingTimeInterval(300) {
+            date = cal.date(byAdding: .day, value: -1, to: date) ?? date
+        }
 
         let displayTime = displayFmt.string(from: date)   // локальная TZ телефона
         let utcISO = isoFmt.string(from: date)
@@ -131,7 +160,7 @@ final class ErrorLogger {
     // MARK: – Ship
 
     func shipBatch() {
-        guard UserDefaults.standard.object(forKey: "telemetry_enabled") as? Bool ?? true else {
+        guard UserDefaults.standard.object(forKey: DefaultsKeys.telemetryEnabled) as? Bool ?? true else {
             lastShippedIndex = entries.count
             return
         }
@@ -183,10 +212,25 @@ final class ErrorLogger {
         try? data.write(to: logsDir.appendingPathComponent(name))
     }
 
-    private func pendingFiles() -> [URL] {
+    private static let batchTTL: TimeInterval = 600 // 10 минут
+
+    private func allBatchFiles() -> [URL] {
         ((try? FileManager.default.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "json" }
             .sorted { $0.path < $1.path }
+    }
+
+    private func pruneExpired() {
+        let cutoff = Date().timeIntervalSince1970 - Self.batchTTL
+        for url in allBatchFiles() {
+            let ts = Double(url.deletingPathExtension().lastPathComponent.split(separator: "-").first ?? "") ?? 0
+            if ts > 0 && ts < cutoff { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    private func pendingFiles() -> [URL] {
+        pruneExpired()
+        return allBatchFiles()
     }
 
     private func startNetworkWatch() {
@@ -224,39 +268,31 @@ final class ErrorLogger {
         uploadQueue.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
+    // Загружаем файлы по одному — параллельная отправка перегружает мобильный канал
+    // и приводит к NSURLErrorNetworkConnectionLost (-1005).
     private func upload(files: [URL], completion: @escaping (Bool) -> Void) {
         guard let url = URL(string: Self.uploadURL) else { completion(false); return }
-        let group = DispatchGroup()
-        var anyFailed = false
-        for file in files {
-            group.enter()
-            guard let data = try? Data(contentsOf: file) else { group.leave(); continue }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = data
-            req.timeoutInterval = 10
-            URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
-                let status = (resp as? HTTPURLResponse)?.statusCode
-                if status == 200 {
-                    try? FileManager.default.removeItem(at: file)
-                } else {
-                    anyFailed = true
-                    let detail: String
-                    if let err {
-                        detail = err.localizedDescription
-                    } else if let data, let body = String(data: data, encoding: .utf8) {
-                        detail = "HTTP \(status ?? 0): \(body.prefix(200))"
-                    } else {
-                        detail = "HTTP \(status ?? 0)"
-                    }
-                    DispatchQueue.main.async { [weak self] in
-                        self?.appendAppLine(level: "ERR", message: "telemetry upload failed: \(detail)")
-                    }
-                }
-                self?.uploadQueue.async { group.leave() }
-            }.resume()
+        uploadNext(files: files[...], url: url, anyFailed: false, completion: completion)
+    }
+
+    private func uploadNext(files: ArraySlice<URL>, url: URL, anyFailed: Bool, completion: @escaping (Bool) -> Void) {
+        guard let file = files.first else { completion(anyFailed); return }
+        let rest = files.dropFirst()
+        guard let data = try? Data(contentsOf: file) else {
+            uploadNext(files: rest, url: url, anyFailed: anyFailed, completion: completion)
+            return
         }
-        group.notify(queue: uploadQueue) { completion(anyFailed) }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        req.timeoutInterval = 15
+        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+            let ok = (resp as? HTTPURLResponse)?.statusCode == 200
+            if ok { try? FileManager.default.removeItem(at: file) }
+            self?.uploadQueue.async {
+                self?.uploadNext(files: rest, url: url, anyFailed: anyFailed || !ok, completion: completion)
+            }
+        }.resume()
     }
 }

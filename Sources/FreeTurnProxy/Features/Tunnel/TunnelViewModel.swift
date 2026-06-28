@@ -9,21 +9,24 @@ final class TunnelViewModel: ObservableObject {
     @Published var shareURL: URL?
 
     // VK-ссылка (per-session) — персистится под прежним ключом.
-    @Published var link: String { didSet { d.set(link, forKey: "manualLink") } }
+    @Published var link: String { didSet { d.set(link, forKey: DefaultsKeys.manualLink) } }
 
     // VK-логин для генерации ссылки.
     @Published var creatingCall = false
     @Published var showVKWebFallback = false
     // VK access-token. Персистится в Keychain (учётные данные), не в plist.
-    private var vkAuthToken: String? {
+    // internal (не private) — тесты устанавливают напрямую, минуя Keychain.
+    var vkAuthToken: String? {
         didSet { Keychain.set(vkAuthToken, for: vkTokenKey) }
     }
 
     private let d = UserDefaults.standard
     private let vkTokenKey = Keychain.vkTokenAccount
+    private let session: URLSession
 
-    init() {
-        link = d.string(forKey: "manualLink") ?? ""
+    init(session: URLSession = .shared) {
+        self.session = session
+        link = d.string(forKey: DefaultsKeys.manualLink) ?? ""
         vkAuthToken = Keychain.get(vkTokenKey)
     }
 
@@ -52,7 +55,7 @@ final class TunnelViewModel: ObservableObject {
         creatingCall = true
         defer { creatingCall = false }
         do {
-            link = try await vkCreateCall(token: token)
+            link = try await vkCreateCall(token: token, session: session)
         } catch {
             // Сбрасываем токен только когда VK сам сказал, что он невалиден
             // (error_code 5 — User authorization failed). Сетевые сбои и

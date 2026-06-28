@@ -14,24 +14,31 @@ enum VKCallError: LocalizedError {
     }
 }
 
-func vkCreateCall(token: String) async throws -> String {
+func vkCreateCall(token: String, session: URLSession = .shared) async throws -> String {
     var comps = URLComponents(string: "https://api.vk.com/method/calls.start")!
     comps.queryItems = [
         .init(name: "access_token", value: token),
         .init(name: "v", value: "5.131"),
     ]
     let data: Data
-    do { (data, _) = try await URLSession.shared.data(from: comps.url!) }
+    do { (data, _) = try await session.data(from: comps.url!) }
     catch { throw VKCallError.network(error) }
 
     struct Resp: Decodable {
-        struct Inner: Decodable { let join_link: String? }
-        struct VKError: Decodable { let error_code: Int; let error_msg: String }
+        struct Inner: Decodable {
+            let joinLink: String?
+            enum CodingKeys: String, CodingKey { case joinLink = "join_link" }
+        }
+        struct VKError: Decodable {
+            let errorCode: Int
+            let errorMsg: String
+            enum CodingKeys: String, CodingKey { case errorCode = "error_code"; case errorMsg = "error_msg" }
+        }
         let response: Inner?
         let error: VKError?
     }
     let resp = try JSONDecoder().decode(Resp.self, from: data)
-    if let e = resp.error { throw VKCallError.apiError(e.error_code, e.error_msg) }
-    guard let link = resp.response?.join_link else { throw VKCallError.noLink }
+    if let e = resp.error { throw VKCallError.apiError(e.errorCode, e.errorMsg) }
+    guard let link = resp.response?.joinLink else { throw VKCallError.noLink }
     return link
 }

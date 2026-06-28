@@ -69,13 +69,13 @@ struct ConfigEditorView: View {
                                          placeholder: "127.0.0.1:9000 по умолчанию", text: $listen,
                                          keyboard: .asciiCapable, error: listenError)
 
-                            VStack(alignment: .leading, spacing: 4) {
-                                Toggle(isOn: $manualCaptcha) {
-                                    Label("Решать капчу вручную", systemImage: "checkmark.shield")
-                                        .font(.caption.bold())
-                                        .foregroundStyle(.secondary)
-                                }
+                            Toggle(isOn: $manualCaptcha) {
+                                Label("Решать капчу вручную", systemImage: "checkmark.shield")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
                             }
+                            .tint(.green)
+                            .padding(.trailing, 2)
                         }
                         .padding(.top, 8)
                     } label: {
@@ -101,50 +101,49 @@ struct ConfigEditorView: View {
         }
     }
 
+    // MARK: – Trimming helpers
+
+    private var trimName: String { name.trimmingCharacters(in: .whitespaces) }
+    private var trimPeer: String { peer.trimmingCharacters(in: .whitespaces) }
+    private var trimObfKey: String { obfKey.trimmingCharacters(in: .whitespaces) }
+    private var trimDns: String { dns.trimmingCharacters(in: .whitespaces) }
+    private var trimListen: String { listen.trimmingCharacters(in: .whitespaces) }
+
     // MARK: – Валидация
 
     private var highlightEmpty: Bool { prefilled }
 
     private var nameError: String? {
-        guard name.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        guard trimName.isEmpty else { return nil }
         return highlightEmpty ? "Укажите название" : nil
     }
     private var peerError: String? {
-        let s = peer.trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty else { return highlightEmpty ? "Укажите адрес сервера" : nil }
-        return Validators.endpoint(s) ? nil : "Формат адрес:порт, напр. 1.2.3.4:56000"
+        guard !trimPeer.isEmpty else { return highlightEmpty ? "Укажите адрес сервера" : nil }
+        return Validators.endpoint(trimPeer) ? nil : "Формат адрес:порт, напр. 1.2.3.4:56000"
     }
     private var obfKeyError: String? {
-        let s = obfKey.trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty else { return nil }
-        return Validators.hexKey(s) ? nil : "64 hex-символа (0–9, a–f)"
+        guard !trimObfKey.isEmpty else { return nil }
+        return Validators.hexKey(trimObfKey) ? nil : "64 hex-символа (0–9, a–f)"
     }
     private var dnsError: String? {
-        let s = dns.trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty else { return nil }
-        return Validators.ipv4(s) ? nil : "Должен быть IPv4, напр. 8.8.8.8"
+        guard !trimDns.isEmpty else { return nil }
+        return Validators.ipv4(trimDns) ? nil : "Должен быть IPv4, напр. 8.8.8.8"
     }
     private var listenError: String? {
-        let s = listen.trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty else { return nil }
-        return Validators.endpoint(s) ? nil : "Формат адрес:порт, напр. 127.0.0.1:9000"
+        guard !trimListen.isEmpty else { return nil }
+        return Validators.endpoint(trimListen) ? nil : "Формат адрес:порт, напр. 127.0.0.1:9000"
     }
 
     private var canSave: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty
-            && Validators.endpoint(peer.trimmingCharacters(in: .whitespaces))
+        !trimName.isEmpty && Validators.endpoint(trimPeer)
             && obfKeyError == nil && dnsError == nil && listenError == nil
     }
 
     private func save() {
         let c = SavedConfig(
-            name: name.trimmingCharacters(in: .whitespaces),
-            peer: peer.trimmingCharacters(in: .whitespaces),
-            obfKey: obfKey.trimmingCharacters(in: .whitespaces),
-            dns: dns.trimmingCharacters(in: .whitespaces),
-            listen: listen.trimmingCharacters(in: .whitespaces),
-            transport: transport,
-            manualCaptcha: manualCaptcha
+            name: trimName, peer: trimPeer, obfKey: trimObfKey,
+            dns: trimDns, listen: trimListen,
+            transport: transport, manualCaptcha: manualCaptcha
         )
         onSave(c)
         dismiss()

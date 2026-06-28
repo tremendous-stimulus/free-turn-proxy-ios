@@ -1,0 +1,85 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - testing
+  pull_request:
+    branches:
+      - main
+      - testing
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: ./.github/actions/build-mobile-framework
+
+      # xcbeautify нужен для красивого лога + генерации JUnit XML, который потом
+      # рендерит dorny/test-reporter как отдельный check на странице run'а.
+      - uses: ./.github/actions/install-xcode-tools
+        with:
+          packages: xcodegen xcbeautify
+
+      - uses: ./.github/actions/cache-xcode-modulecache
+
+      - run: make project
+
+      # На раннере доступный iPhone-симулятор зависит от Xcode (например, на
+      # Xcode 26 RC2 нет iPhone 16, есть 17). Берём первый iPhone из списка —
+      # не привязываемся к модели, лишь бы был iOS Simulator.
+      - name: Pick iPhone simulator
+        id: sim
+        run: |
+          NAME=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | startswith("iPhone"))] | first | .name')
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Picked: $NAME"
+
+      - uses: ./.github/actions/build-for-testing
+        with:
+          destination: "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}"
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          mkdir -p build/reports
+          xcodebuild test-without-building \
+            -scheme FreeTurnProxy \
+            -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
+            -derivedDataPath DerivedData \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify --report junit --report-path build/reports --renderer github-actions
+
+      # if: always() — рендерим даже если тесты упали (как раз тогда это и нужно).
+      # use-actions-summary: false — иначе dorny пишет per-test листинг ТОЛЬКО
+      # в Actions Summary, без отдельного check. С false создаётся отдельный
+      # check «Test results» рядом с workflow-чеком, кликабельный из PR.
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Test results
+          path: build/reports/junit.xml
+          reporter: java-junit
+          fail-on-error: false
+          use-actions-summary: false
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults.xcresult

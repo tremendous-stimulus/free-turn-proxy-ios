@@ -8,7 +8,12 @@ enum CertificateChecker {
     static func daysUntilExpiry() -> Int? {
         guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
               let data = try? Data(contentsOf: url) else { return nil }
+        return daysUntilExpiry(in: data, now: Date())
+    }
 
+    // Чистая часть для тестирования. На вход — содержимое .mobileprovision
+    // (или совместимый XML-plist), на выход — то же, что и daysUntilExpiry().
+    static func daysUntilExpiry(in data: Data, now: Date) -> Int? {
         let start = Data("<?xml".utf8)
         let end = Data("</plist>".utf8)
         guard let startRange = data.range(of: start),
@@ -19,7 +24,7 @@ enum CertificateChecker {
                 from: Data(xmlData), format: nil) as? [String: Any],
               let expDate = plist["ExpirationDate"] as? Date else { return nil }
 
-        let seconds = expDate.timeIntervalSince(Date())
+        let seconds = expDate.timeIntervalSince(now)
         guard seconds > 0 else { return nil }
         return Int(ceil(seconds / 86400))
     }
