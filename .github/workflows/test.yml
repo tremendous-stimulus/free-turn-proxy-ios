@@ -65,6 +65,9 @@ jobs:
             | xcbeautify --report junit --report-path build/reports --renderer github-actions
 
       # if: always() — рендерим даже если тесты упали (как раз тогда это и нужно).
+      # use-actions-summary: false — иначе dorny пишет per-test листинг ТОЛЬКО
+      # в Actions Summary, без отдельного check. С false создаётся отдельный
+      # check «Test results» рядом с workflow-чеком, кликабельный из PR.
       - name: Publish test results
         if: always()
         uses: dorny/test-reporter@v1
@@ -73,6 +76,7 @@ jobs:
           path: build/reports/junit.xml
           reporter: java-junit
           fail-on-error: false
+          use-actions-summary: false
 
       - if: failure()
         uses: actions/upload-artifact@v4
