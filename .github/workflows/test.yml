@@ -48,19 +48,20 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "Picked: $NAME"
 
+      - uses: ./.github/actions/build-for-testing
+        with:
+          destination: "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}"
+
       - name: Run tests
         run: |
           set -o pipefail
           mkdir -p build/reports
-          xcodebuild test \
+          xcodebuild test-without-building \
             -scheme FreeTurnProxy \
             -destination "platform=iOS Simulator,name=${{ steps.sim.outputs.name }}" \
             -derivedDataPath DerivedData \
             -resultBundlePath TestResults.xcresult \
-            -skipPackagePluginValidation \
-            -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
-            ONLY_ACTIVE_ARCH=YES \
             | xcbeautify --report junit --report-path build/reports --renderer github-actions
 
       # if: always() — рендерим даже если тесты упали (как раз тогда это и нужно).

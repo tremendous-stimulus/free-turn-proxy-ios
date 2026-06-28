@@ -1,0 +1,66 @@
+name: Build for testing + cache DerivedData
+description: >
+  xcodebuild build-for-testing — собирает app и test-бандлы. Кешируем
+  DerivedData/Build целиком: Products + Intermediates. Restore-keys префиксный:
+  если точный hash не совпал, восстановит ближайший кеш и xcodebuild сделает
+  incremental rebuild (только изменившееся пересоберёт).
+
+inputs:
+  destination:
+    description: "xcodebuild -destination (например 'platform=iOS Simulator,name=iPhone 17')"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Compute cache key
+      id: key
+      shell: bash
+      run: |
+        # Версия Xcode пинит формат DerivedData — между мажорными версиями
+        # модули несовместимы. Хеш по исходникам и project.yml ловит любое
+        # изменение, требующее пересборки.
+        XCODE_V=$(xcodebuild -version 2>/dev/null | head -n1 | awk '{print $2}')
+        H="${{ hashFiles('Sources/**/*.swift', 'Tests/**/*.swift', 'project.yml', 'Sources/Info.plist', 'Sources/Info-Test.plist') }}"
+        echo "v=dd-${{ runner.os }}-xcode${XCODE_V}-${H}" >> "$GITHUB_OUTPUT"
+        echo "prefix=dd-${{ runner.os }}-xcode${XCODE_V}-" >> "$GITHUB_OUTPUT"
+
+    - name: Restore DerivedData cache
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        # Products — собранные .app/.xctest, Intermediates — .o/.swiftmodule.
+        # Logs/Index/ModuleCache пропускаем (логи не нужны, ModuleCache в своём
+        # кеше отдельно, Index — это для автокомплита в Xcode-IDE).
+        path: |
+          DerivedData/Build/Products
+          DerivedData/Build/Intermediates.noindex
+        key: ${{ steps.key.outputs.v }}
+        restore-keys: |
+          ${{ steps.key.outputs.prefix }}
+
+    - name: xcodebuild build-for-testing
+      shell: bash
+      run: |
+        set -o pipefail
+        xcodebuild build-for-testing \
+          -scheme FreeTurnProxy \
+          -destination "${{ inputs.destination }}" \
+          -derivedDataPath DerivedData \
+          -skipPackagePluginValidation \
+          -skipMacroValidation \
+          CODE_SIGNING_ALLOWED=NO \
+          ONLY_ACTIVE_ARCH=YES \
+          | xcbeautify --renderer github-actions
+
+    # if: always() && cache-hit != 'true' — сохраняем сразу после билда, чтобы
+    # падение тестов ниже не съело сохранение. На точный hit — DerivedData уже
+    # актуальна, save no-op.
+    - name: Save DerivedData cache
+      if: always() && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          DerivedData/Build/Products
+          DerivedData/Build/Intermediates.noindex
+        key: ${{ steps.key.outputs.v }}
