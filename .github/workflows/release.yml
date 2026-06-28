@@ -54,16 +54,18 @@ jobs:
 
       - name: Build unsigned app
         run: |
-          # -target вместо -scheme: scheme включает test-таргеты, которые ломают
-          # Release-сборку (@testable import не резолвится без ENABLE_TESTABILITY).
-          # IPA не нужен test-bundles — собираем только app-таргет напрямую.
-          xcodebuild -target FreeTurnProxy -configuration Release -sdk iphoneos \
+          # Используем archive action: фильтрует BuildAction по
+          # buildForArchiving=YES, поэтому test-таргеты не подтягиваются и
+          # не ломают сборку через @testable import.
+          xcodebuild -scheme FreeTurnProxy -configuration Release -sdk iphoneos \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+            -archivePath build/FreeTurnProxy.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            archive
 
       - name: Package IPA
         run: |
-          APP="build/Build/Products/Release-iphoneos/FreeTurnProxy.app"
+          APP="build/FreeTurnProxy.xcarchive/Products/Applications/FreeTurnProxy.app"
           mkdir -p Payload
           cp -R "$APP" Payload/
           zip -qry FreeTurnProxy.ipa Payload
