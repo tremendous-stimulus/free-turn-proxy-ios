@@ -32,7 +32,10 @@ final class ErrorLogger {
     private var lastGoLogLength = 0
     private var lastShippedIndex = 0
 
-    private static let maxEntries = 5000
+    // Кэп буфера держим скромным: при типичной нагрузке Go-биндинг шлёт логи
+    // десятками в секунду, лимит — это аварийный потолок, чтобы при долгом
+    // отсутствии сети/телеметрии буфер не разъедал память. 10к × ~250 байт ≈ 2.5 МБ.
+    static let maxEntries = 10_000
 
     var displayLogs: String { entries.map(\.display).joined(separator: "\n") }
 
@@ -50,9 +53,7 @@ final class ErrorLogger {
 
         let parsed = rawLines.compactMap(Self.parseGoLine)
         entries.append(contentsOf: parsed)
-        if entries.count > Self.maxEntries {
-            entries.removeFirst(entries.count - Self.maxEntries)
-        }
+        enforceMaxEntries()
     }
 
     // App-level события.
@@ -61,9 +62,18 @@ final class ErrorLogger {
         let display = "\(Self.displayFmt.string(from: now)) [\(level)] [App] \(message)"
         let utcISO = Self.isoFmt.string(from: now)
         entries.append(LogEntry(display: display, utcISO: utcISO, level: level, message: "[App] \(message)"))
-        if entries.count > Self.maxEntries {
-            entries.removeFirst(entries.count - Self.maxEntries)
-        }
+        enforceMaxEntries()
+    }
+
+    // Срезает голову буфера до maxEntries и корректирует lastShippedIndex на
+    // ту же величину — иначе после ужима индекс «уходит» в правую часть
+    // массива и при следующем shipBatch мы пропустим только что добавленные
+    // строки (dropFirst(lastShippedIndex) даст пустой слайс).
+    private func enforceMaxEntries() {
+        guard entries.count > Self.maxEntries else { return }
+        let overflow = entries.count - Self.maxEntries
+        entries.removeFirst(overflow)
+        lastShippedIndex = max(0, lastShippedIndex - overflow)
     }
 
     func resetGoPosition() { lastGoLogLength = 0 }
