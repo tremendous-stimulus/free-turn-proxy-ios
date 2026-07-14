@@ -3,7 +3,7 @@
 # Переопределяемо для локальной разработки:
 #   make framework GO_REPO=/path/to/free-turn-proxy GO_REF=main
 GO_REPO ?= https://github.com/samosvalishe/free-turn-proxy
-GO_REF  ?= v1.5.2
+GO_REF  ?= v1.8.0
 SRC_DIR := .framework-src
 
 .PHONY: framework project open clean all
