@@ -74,10 +74,10 @@ struct FreeturnLinkScanSheet: View {
             }
             .padding(.horizontal)
         } else if scanner.cameraAccessDenied {
-            Label("Разреши доступ к камере в Настройках", systemImage: "gearshape")
+            Label("Разрешите доступ к камере в Настройках", systemImage: "gearshape")
                 .font(.footnote).foregroundStyle(.secondary)
         } else {
-            Text("Наведи камеру на QR-код со ссылкой freeturn://")
+            Text("Наведите камеру на QR-код")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }

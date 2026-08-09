@@ -34,14 +34,8 @@ struct FreeturnLinkShareView: View {
                             .background(Color.white)
                             .clipShape(RoundedRectangle(cornerRadius: 16))
                     }
-
-                    Text(link)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Text("Ссылка на VK-звонок сюда не входит — получатель вводит свою после подключения.")
+                    
+                    Text("Отсканируйте QR во вкладке \"Туннель\" > \"Конфигурации\" > \"+\" > \"Сканировать QR\"")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -57,7 +51,7 @@ struct FreeturnLinkShareView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Ссылка на конфигурацию")
+            .navigationTitle("QR с конфигурацией")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

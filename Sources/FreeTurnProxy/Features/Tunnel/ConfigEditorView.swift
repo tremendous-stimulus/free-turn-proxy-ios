@@ -123,7 +123,6 @@ struct ConfigEditorView: View {
                     Text("Нет").tag("none")
                     Text("rtpopus").tag("rtpopus")
                     Text("rtpopus2").tag("rtpopus2")
-                    Text("rtpopus3").tag("rtpopus3")
                 }
                 .pickerStyle(.segmented)
             }
