@@ -8,6 +8,8 @@ final class TunnelViewModel: ObservableObject {
     @Published var errorText: String?
     @Published var shareURL: URL?
     @Published var shareLink: String?
+    // Тот же shareLink рендерится либо экраном с QR, либо текстовым share sheet.
+    @Published var shareLinkIsQR = false
 
     // VK-ссылки — общий пул для подключения, персистятся через ManualLinks.
     // Правятся через VKLinksEditorView (кнопка «Редактировать VK-ссылки»).
@@ -96,7 +98,13 @@ final class TunnelViewModel: ObservableObject {
     }
 
     // cid и wg в исходящую ссылку не проставляем — см. FreeturnLink.encode.
-    func shareLink(_ c: SavedConfig) {
+    func shareLinkText(_ c: SavedConfig) {
         shareLink = FreeturnLink.encode(config: c, name: c.name)
+        shareLinkIsQR = false
+    }
+
+    func shareLinkQR(_ c: SavedConfig) {
+        shareLink = FreeturnLink.encode(config: c, name: c.name)
+        shareLinkIsQR = true
     }
 }

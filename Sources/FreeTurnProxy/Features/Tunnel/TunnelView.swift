@@ -10,7 +10,14 @@ struct TunnelView: View {
     @State private var showUndo = false
     @State private var showImportPicker = false
     @State private var showLinksEditor = false
+    @State private var showLinkInput = false
+    @State private var linkInputText = ""
+    @State private var showQRScan = false
     @Environment(\.isBannerVisible) private var isBannerVisible
+
+    // Литерал-плейсхолдер трактовался бы как LocalizedStringKey, и SwiftUI
+    // автолинкует в нём голый "https://"-подобный текст синим.
+    private static let linkInputPlaceholder = "freeturn://…"
 
     var body: some View {
         NavigationStack {
@@ -45,11 +52,19 @@ struct TunnelView: View {
                 if let url = vm.shareURL { ShareSheet(items: [url]) }
             }
             .sheet(isPresented: .isNotNil($vm.shareLink)) {
-                if let link = vm.shareLink { FreeturnLinkShareView(link: link) }
+                if let link = vm.shareLink {
+                    if vm.shareLinkIsQR { FreeturnLinkShareView(link: link) }
+                    else { ShareSheet(items: [link]) }
+                }
             }
             .sheet(isPresented: $showLinksEditor) {
                 VKLinksEditorView(initialLinks: vm.links, vm: vm) { newLinks in
                     vm.links = newLinks
+                }
+            }
+            .sheet(isPresented: $showQRScan) {
+                FreeturnLinkScanSheet { cfg in
+                    editorTarget = EditorTarget(initial: cfg, editingID: nil)
                 }
             }
             .fileImporter(
@@ -58,6 +73,15 @@ struct TunnelView: View {
                 allowsMultipleSelection: false,
                 onCompletion: handleImportPick
             )
+            .alert("Ввести ссылку", isPresented: $showLinkInput) {
+                TextField(Self.linkInputPlaceholder, text: $linkInputText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("Импортировать") { importLink() }
+                Button("Отмена", role: .cancel) { linkInputText = "" }
+            } message: {
+                Text("Вставьте ссылку freeturn://, полученную от владельца сервера")
+            }
             .alert("Удалить «\(pendingDelete?.name ?? "")»?",
                    isPresented: .isNotNil($pendingDelete),
                    presenting: pendingDelete) { c in
@@ -84,6 +108,18 @@ struct TunnelView: View {
                     store.pendingImport = nil
                 }
             }
+        }
+    }
+
+    private func importLink() {
+        let text = linkInputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        linkInputText = ""
+        guard !text.isEmpty else { return }
+        do {
+            let cfg = try FreeturnLink.parse(text, defaultName: "Импортировано по ссылке")
+            editorTarget = EditorTarget(initial: cfg, editingID: nil)
+        } catch {
+            vm.errorText = error.localizedDescription
         }
     }
 
@@ -164,10 +200,16 @@ struct TunnelView: View {
                 Menu {
                     Button {
                         editorTarget = EditorTarget(initial: nil, editingID: nil)
-                    } label: { Label("Добавить вручную", systemImage: "square.and.pencil") }
+                    } label: { Label("Настроить вручную", systemImage: "square.and.pencil") }
+                    Button {
+                        showLinkInput = true
+                    } label: { Label("Ввести ссылку", systemImage: "link") }
+                    Button {
+                        showQRScan = true
+                    } label: { Label("Сканировать QR", systemImage: "qrcode.viewfinder") }
                     Button {
                         showImportPicker = true
-                    } label: { Label("Импортировать из файла", systemImage: "doc.badge.plus") }
+                    } label: { Label("Загрузить файл", systemImage: "doc.badge.plus") }
                 } label: {
                     Image(systemName: "plus.circle.fill").font(.title3)
                 }
@@ -203,12 +245,19 @@ struct TunnelView: View {
                     editorTarget = EditorTarget(initial: c, editingID: c.id)
                 } label: { Label("Редактировать", systemImage: "pencil") }
                     .disabled(proxy.isRunning && isSelected)
-                Button {
-                    vm.shareLink(c)
-                } label: { Label("Поделиться ссылкой", systemImage: "qrcode") }
-                Button {
-                    vm.share(c)
-                } label: { Label("Поделиться файлом", systemImage: "square.and.arrow.up") }
+                Menu {
+                    Button {
+                        vm.share(c)
+                    } label: { Label("Файл", systemImage: "doc") }
+                    Button {
+                        vm.shareLinkText(c)
+                    } label: { Label("Ссылка", systemImage: "link") }
+                    Button {
+                        vm.shareLinkQR(c)
+                    } label: { Label("QR-код", systemImage: "qrcode") }
+                } label: {
+                    Label("Поделиться", systemImage: "square.and.arrow.up")
+                }
                 Button(role: .destructive) {
                     pendingDelete = c
                 } label: { Label("Удалить", systemImage: "trash") }
