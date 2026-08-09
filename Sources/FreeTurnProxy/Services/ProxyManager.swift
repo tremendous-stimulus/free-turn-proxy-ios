@@ -13,15 +13,16 @@ final class ProxyManager: ObservableObject {
     @Published var errorMessage: String = ""
     @Published var configFileName: String?
 
-    // Статистика трафика
+    // Статистика трафика — обновляется отдельным лёгким поллингом getState(),
+    // потому что EventSink.onState байтовые счётчики не несёт (только стадию
+    // и стримы). Состояние туннеля само по себе push-driven через onState.
     @Published var txTotalBytes: Int64 = 0
     @Published var rxTotalBytes: Int64 = 0
     @Published var txRateBytesPerSec: Int64 = 0
     @Published var rxRateBytesPerSec: Int64 = 0
 
     private var config: FreeTurnConfig?
-    private var statusTimer: Timer?
-    private var logPollTimer: Timer?   // ingestion Go → unified buffer (0.5s)
+    private var statsTimer: Timer?
     private var logShipTimer: Timer?   // ship unified buffer → worker (10s)
     private var probeTimer: Timer?     // зонд живости туннеля (5s)
     private var lastLoggedError = ""
@@ -32,13 +33,13 @@ final class ProxyManager: ObservableObject {
     private static let probeURL = URL(string: "http://captive.apple.com")!
 
     // Реконнект-цикл стартует из трёх мест, все идут через enterRetryCycle():
-    //   • Go выдал error из connected (Snapshot.State из поллинга);
+    //   • Go выдал error из connected (push через EventSink.onState);
     //   • healthcheck-зонд (captive.apple.com) провалился;
     //   • сменилась сеть (LTE↔Wi-Fi через NetworkMonitor).
-    // isReconnecting замораживает поллинг между mobile.stop() и mobile.start(),
-    // чтобы промежуточный idle Go-стейта не уронил туннель в .idle.
+    // Сам реконнект — один MobileRestart, без промежуточного stop+start:
+    // ядро атомарно подменяет текущую сессию, поэтому нет окна, в котором
+    // push мог бы прислать «случайный» idle.
     private let network = NetworkMonitor()
-    private var isReconnecting = false
 
     // Срабатывает только если в течение сессии хотя бы раз дошли до connected —
     // connecting→error не ретраит (это первичный провал коннекта, не реконнект).
@@ -94,12 +95,9 @@ final class ProxyManager: ObservableObject {
         retryBackoffSeconds = 0
         inRetryCycle = false
         let persistLogs = UserDefaults.standard.object(forKey: DefaultsKeys.persistLogs) as? Bool ?? false
-        if persistLogs {
-            ErrorLogger.shared.resetGoPosition()
-        } else {
+        if !persistLogs {
             ErrorLogger.shared.clear()
         }
-        startPolling()
         startActiveTimers()
         network.onChange = { [weak self] in
             DispatchQueue.main.async {
@@ -121,7 +119,6 @@ final class ProxyManager: ObservableObject {
         retryBackoffSeconds = 0
         autoReconnectAttempt = 0
         everConnected = false
-        isReconnecting = false
         inRetryCycle = false
         UNUserNotificationCenter.current()
             .removeDeliveredNotifications(withIdentifiers: [lostNotifID, recoveredNotifID])
@@ -132,22 +129,83 @@ final class ProxyManager: ObservableObject {
         connectedStreams = 0
         totalStreams = 0
         errorMessage = ""
-        stopPolling()
+        stopTimers()
     }
 
-    // MARK: – Запуск Mobile (вынесено для повторного использования при reconnect)
+    // MARK: – Запуск/рестарт Mobile
 
+    // subUrl у нас всегда пустой, поэтому синхронный фетч подписки внутри
+    // startLocked (см. mobile/api.go) для нас недостижим — гонять start на
+    // фоновой очереди пока незачем. Понадобится, когда появится поддержка
+    // subUrl.
     private func startMobile(_ cfg: FreeTurnConfig) throws {
-        mobile.setManualCaptcha(cfg.manualCaptcha)
-        try mobile.start(
-            link: cfg.link,
-            peer: cfg.peer,
-            dns: cfg.dns ?? "",
-            listen: cfg.listen ?? "127.0.0.1:9000",
-            transport: cfg.transport,
-            obfKey: cfg.obfKey,
-            clientType: "ios"
-        )
+        try mobile.start(configJSON: coreConfig(for: cfg).encodedJSON())
+    }
+
+    private func restartMobile(_ cfg: FreeTurnConfig) throws {
+        try mobile.restart(configJSON: coreConfig(for: cfg).encodedJSON())
+    }
+
+    // Профиль обфускации пока не настраиваем из UI (см. Этап B плана) —
+    // если ключ задан, используем rtpopus как и v1.8.0-биндинг делал раньше.
+    private func coreConfig(for cfg: FreeTurnConfig) -> CoreConfig {
+        var c = CoreConfig(peer: cfg.peer, clientId: ClientIdentity.current)
+        c.turn.transport = cfg.transport
+        c.vk.links = [cfg.link]
+        c.vk.manualCaptcha = cfg.manualCaptcha
+        c.obf.profile = cfg.obfKey.isEmpty ? "none" : "rtpopus"
+        c.obf.key = cfg.obfKey
+        if let listen = cfg.listen, !listen.isEmpty { c.proxy.listen = listen }
+        if let dns = cfg.dns, !dns.isEmpty { c.dns.servers = [dns] }
+        return c
+    }
+
+    // MARK: – Push от EventSinkBridge
+
+    // Единственный источник TunnelState теперь — этот метод (вызывается из
+    // EventSinkBridge.onState на main thread). Раньше то же самое читалось
+    // поллингом getState() раз в 0.5с.
+    func handleState(_ goState: String, streams: Int, total: Int, errMsg: String) {
+        let st = TunnelState(goState: goState)
+        state = st
+        connectedStreams = streams
+        totalStreams = total
+        errorMessage = errMsg
+
+        if st == .connected {
+            everConnected = true
+            autoReconnectAttempt = 0
+            if inRetryCycle {
+                inRetryCycle = false
+                postRecoveredNotification()
+            }
+        }
+
+        // Пишем ошибку в единый буфер когда она появляется впервые.
+        if !errMsg.isEmpty && errMsg != lastLoggedError {
+            lastLoggedError = errMsg
+            ErrorLogger.shared.appendAppLine(level: "ERR", message: errMsg)
+        } else if errMsg.isEmpty {
+            lastLoggedError = ""
+        }
+
+        let active = (st == .connecting || st == .connected || st == .captcha)
+        // Туннель оборвался после успешного коннекта — в retry-цикл.
+        if st == .error && everConnected {
+            enterRetryCycle()
+            return
+        }
+        isRunning = active
+        if !active {
+            if st == .error && !everConnected {
+                // Так и не подключились — пуш с гардом видимости UI внутри
+                // postInitialConnectFailureNotification.
+                postInitialConnectFailureNotification()
+            }
+            ErrorLogger.shared.shipBatch()
+            stopTimers()
+            audio.stop()
+        }
     }
 
     // MARK: – Унифицированный вход в retry-цикл
@@ -156,10 +214,8 @@ final class ProxyManager: ObservableObject {
     // ошибка из Go (connected→error), провал healthcheck-зонда, смена сети.
     // Гард на everConnected: до первого успешного коннекта реконнект не делаем —
     // там работает свой 15с-watchdog Go, и пуш «Переподключаемся» был бы ложью.
-    // Гард на isReconnecting: если уже в backoff/restart-фазе, повторный триггер
-    // (например, ещё одна смена сети) не должен сбрасывать счётчик попыток.
     private func enterRetryCycle() {
-        guard isRunning, config != nil, everConnected, !isReconnecting else { return }
+        guard isRunning, config != nil, everConnected else { return }
         if !inRetryCycle {
             inRetryCycle = true
             postReconnectingNotification()
@@ -178,7 +234,6 @@ final class ProxyManager: ObservableObject {
 
     private func triggerAutoReconnect() {
         guard isRunning, config != nil else { return }
-        isReconnecting = true
         state = .retryBackoff
         connectedStreams = 0
         let delay = autoReconnectDelay()
@@ -205,23 +260,17 @@ final class ProxyManager: ObservableObject {
     }
 
     private func performAutoReconnect() {
-        guard isRunning, config != nil else { return }
+        guard isRunning, let config else { return }
         backoffTickTimer?.invalidate()
         backoffTickTimer = nil
         retryBackoffSeconds = 0
         state = .connecting
-        mobile.stop()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self, self.isRunning, let config = self.config else { return }
-            do {
-                try self.startMobile(config)
-                self.isReconnecting = false
-            } catch {
-                // Старт сам бросил исключение — считаем как очередной фейл и
-                // ждём следующий бекофф.
-                self.isReconnecting = false
-                self.triggerAutoReconnect()
-            }
+        do {
+            try restartMobile(config)
+        } catch {
+            // Рестарт сам бросил исключение — считаем как очередной фейл и
+            // ждём следующий бекофф.
+            triggerAutoReconnect()
         }
     }
 
@@ -270,67 +319,27 @@ final class ProxyManager: ObservableObject {
         UNUserNotificationCenter.current().add(req)
     }
 
-    // MARK: – Polling
+    // MARK: – Статистика трафика (лёгкий поллинг)
 
-    private func startPolling() {
-        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+    private func startActiveTimers() {
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
             let snap = self.mobile.getState()
             DispatchQueue.main.async {
-                if self.isReconnecting { return }
-                let st = TunnelState(goState: snap?.state ?? "idle")
-                self.state = st
-                self.connectedStreams = snap?.streams ?? 0
-                self.totalStreams = snap?.total ?? 0
-                self.errorMessage = snap?.errMsg ?? ""
                 self.txTotalBytes = snap?.txTotal ?? 0
                 self.rxTotalBytes = snap?.rxTotal ?? 0
                 self.txRateBytesPerSec = snap?.txRate ?? 0
                 self.rxRateBytesPerSec = snap?.rxRate ?? 0
-
-                if st == .connected {
-                    self.everConnected = true
-                    self.autoReconnectAttempt = 0
-                    // Вышли из цикла ретраев → шлём «восстановлено».
-                    if self.inRetryCycle {
-                        self.inRetryCycle = false
-                        self.postRecoveredNotification()
-                    }
-                }
-
-                // Пишем ошибку в единый буфер когда она появляется впервые.
-                let err = snap?.errMsg ?? ""
-                if !err.isEmpty && err != self.lastLoggedError {
-                    self.lastLoggedError = err
-                    ErrorLogger.shared.appendAppLine(level: "ERR", message: err)
-                } else if err.isEmpty {
-                    self.lastLoggedError = ""
-                }
-
-                let active = (st == .connecting || st == .connected || st == .captcha)
-                // Туннель оборвался после успешного коннекта — в retry-цикл.
-                if st == .error && self.everConnected {
-                    self.enterRetryCycle()
-                    return
-                }
-                self.isRunning = active
-                if !active {
-                    if st == .error && !self.everConnected {
-                        // Так и не подключились — пуш с гардом видимости UI
-                        // внутри postInitialConnectFailureNotification.
-                        self.postInitialConnectFailureNotification()
-                    }
-                    ErrorLogger.shared.shipBatch()
-                    self.stopPolling()
-                    self.audio.stop()
-                }
             }
         }
+        logShipTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+            ErrorLogger.shared.shipBatch()
+        }
+        startProbing()
     }
 
-    private func stopPolling() {
-        statusTimer?.invalidate(); statusTimer = nil
-        logPollTimer?.invalidate(); logPollTimer = nil
+    private func stopTimers() {
+        statsTimer?.invalidate(); statsTimer = nil
         logShipTimer?.invalidate(); logShipTimer = nil
         probeTimer?.invalidate(); probeTimer = nil
         lastLoggedError = ""
@@ -346,7 +355,7 @@ final class ProxyManager: ObservableObject {
     }
 
     private func performProbe() {
-        guard state == .connected, isRunning, !isReconnecting else { return }
+        guard state == .connected, isRunning else { return }
         var req = URLRequest(url: Self.probeURL)
         req.timeoutInterval = Self.probeInterval - 0.5
         URLSession.shared.dataTask(with: req) { [weak self] _, _, error in
@@ -359,17 +368,6 @@ final class ProxyManager: ObservableObject {
                 }
             }
         }.resume()
-    }
-
-    private func startActiveTimers() {
-        logPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            ErrorLogger.shared.ingestGoLogs(self.mobile.getLogs())
-        }
-        logShipTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-            ErrorLogger.shared.shipBatch()
-        }
-        startProbing()
     }
 }
 

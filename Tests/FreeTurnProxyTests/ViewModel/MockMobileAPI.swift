@@ -5,27 +5,35 @@ import Mobile
 final class MockMobileAPI: MobileAPI {
     var startCalled = false
     var startCallCount = 0
+    var restartCallCount = 0
     var stopCalled = false
     var stopCallCount = 0
     var clearLogsCalled = false
-    var manualCaptchaSet: Bool?
-    var captchaPresenterSet = false
+    var eventSinkSet: MobileEventSinkProtocol?
 
     var startError: Error?
-    var logsToReturn = ""
+    var restartError: Error?
+    var lastConfigJSON: String?
 
-    // Текущий снепшот состояния, который вернёт getState(). Тесты подменяют его
-    // по ходу теста, чтобы прогнать туннель через connecting→connected→error.
-    var currentState: String = "idle"
-    var currentErrMsg: String = ""
+    // Байтовые счётчики, которые ProxyManager вычитывает поллингом
+    // getState() для статистики трафика (стадия/стримы/ошибка теперь идут
+    // через push EventSink, а не через getState()).
+    var txTotal: Int64 = 0
+    var rxTotal: Int64 = 0
+    var txRate: Int64 = 0
+    var rxRate: Int64 = 0
 
-    func setManualCaptcha(_ on: Bool) { manualCaptchaSet = on }
-
-    func start(link: String, peer: String, dns: String, listen: String,
-               transport: String, obfKey: String, clientType: String) throws {
+    func start(configJSON: String) throws {
         startCalled = true
         startCallCount += 1
+        lastConfigJSON = configJSON
         if let err = startError { throw err }
+    }
+
+    func restart(configJSON: String) throws {
+        restartCallCount += 1
+        lastConfigJSON = configJSON
+        if let err = restartError { throw err }
     }
 
     func stop() {
@@ -35,14 +43,20 @@ final class MockMobileAPI: MobileAPI {
 
     func getState() -> MobileSnapshot? {
         let s = MobileSnapshot()
-        s.state = currentState
-        s.errMsg = currentErrMsg
+        s.txTotal = txTotal
+        s.rxTotal = rxTotal
+        s.txRate = txRate
+        s.rxRate = rxRate
         return s
     }
 
-    func getLogs() -> String { logsToReturn }
+    func dumpLogs() -> String { "" }
 
     func clearLogs() { clearLogsCalled = true }
 
-    func setCaptchaPresenter(_ p: MobileCaptchaPresenterProtocol?) { captchaPresenterSet = true }
+    func setEventSink(_ s: MobileEventSinkProtocol?) { eventSinkSet = s }
+
+    func validateConfig(_ json: String) -> String { "" }
+
+    func version() -> String { "mock" }
 }

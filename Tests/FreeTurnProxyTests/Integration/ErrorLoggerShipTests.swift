@@ -119,7 +119,7 @@ final class ErrorLoggerShipTests: XCTestCase {
     // MARK: – Buffer overflow: после ужима lastShippedIndex не должен пропускать новые строки
 
     // Регресс на «тихо потерянные» строки: после shipBatch индекс уехал к
-    // entries.count, потом appendAppLine/ingestGoLogs ужал буфер. Если индекс
+    // entries.count, потом appendAppLine ужал буфер. Если индекс
     // не сдвинуть на overflow, следующий shipBatch отправит пустой батч и
     // свежие строки уйдут в небытие. Используем mock 500 — файл остаётся на
     // диске после неудачной заливки, можно проверить через его содержимое.
