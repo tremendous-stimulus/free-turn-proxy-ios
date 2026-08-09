@@ -44,6 +44,9 @@ struct TunnelView: View {
             .sheet(isPresented: .isNotNil($vm.shareURL)) {
                 if let url = vm.shareURL { ShareSheet(items: [url]) }
             }
+            .sheet(isPresented: .isNotNil($vm.shareLink)) {
+                if let link = vm.shareLink { FreeturnLinkShareView(link: link) }
+            }
             .sheet(isPresented: $showLinksEditor) {
                 VKLinksEditorView(initialLinks: vm.links, vm: vm) { newLinks in
                     vm.links = newLinks
@@ -201,8 +204,11 @@ struct TunnelView: View {
                 } label: { Label("Редактировать", systemImage: "pencil") }
                     .disabled(proxy.isRunning && isSelected)
                 Button {
+                    vm.shareLink(c)
+                } label: { Label("Поделиться ссылкой", systemImage: "qrcode") }
+                Button {
                     vm.share(c)
-                } label: { Label("Поделиться", systemImage: "square.and.arrow.up") }
+                } label: { Label("Поделиться файлом", systemImage: "square.and.arrow.up") }
                 Button(role: .destructive) {
                     pendingDelete = c
                 } label: { Label("Удалить", systemImage: "trash") }

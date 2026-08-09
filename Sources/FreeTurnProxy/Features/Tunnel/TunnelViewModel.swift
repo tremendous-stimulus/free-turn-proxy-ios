@@ -7,6 +7,7 @@ final class TunnelViewModel: ObservableObject {
 
     @Published var errorText: String?
     @Published var shareURL: URL?
+    @Published var shareLink: String?
 
     // VK-ссылки — общий пул для подключения, персистятся через ManualLinks.
     // Правятся через VKLinksEditorView (кнопка «Редактировать VK-ссылки»).
@@ -92,5 +93,10 @@ final class TunnelViewModel: ObservableObject {
             return
         }
         shareURL = url
+    }
+
+    // cid и wg в исходящую ссылку не проставляем — см. FreeturnLink.encode.
+    func shareLink(_ c: SavedConfig) {
+        shareLink = FreeturnLink.encode(config: c, name: c.name)
     }
 }

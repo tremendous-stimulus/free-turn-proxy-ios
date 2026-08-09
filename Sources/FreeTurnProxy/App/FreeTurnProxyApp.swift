@@ -15,8 +15,13 @@ struct FreeTurnProxyApp: App {
         WindowGroup {
             MainTabView()
                 .onOpenURL { url in
-                    // Открыли .freeturn через «Открыть в…»/Файлы — откроется редактор.
-                    ConfigStore.shared.receiveFile(url)
+                    if url.scheme == FreeturnLink.scheme {
+                        // freeturn://-ссылка (Telegram, Заметки, другое приложение).
+                        ConfigStore.shared.receiveLink(url)
+                    } else {
+                        // Открыли .freeturn через «Открыть в…»/Файлы — откроется редактор.
+                        ConfigStore.shared.receiveFile(url)
+                    }
                 }
         }
     }
