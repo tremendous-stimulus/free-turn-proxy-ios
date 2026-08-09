@@ -15,6 +15,14 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.5.0",
+          "date": "2026-08-09",
+          "localizedDescription": "Релиз 1.5.0.",
+          "downloadURL": "https://github.com/tremendous-stimulus/free-turn-proxy-ios/releases/download/1.5.0/FreeTurnProxy.ipa",
+          "size": 9341960,
+          "minOSVersion": "16.0"
+        },
+        {
           "version": "1.4.1",
           "date": "2026-07-14",
           "localizedDescription": "Релиз 1.4.1.",
@@ -87,11 +95,11 @@
           "minOSVersion": "16.0"
         }
       ],
-      "version": "1.4.1",
-      "versionDate": "2026-07-14",
+      "version": "1.5.0",
+      "versionDate": "2026-08-09",
       "versionDescription": "Первый релиз.",
-      "downloadURL": "https://github.com/tremendous-stimulus/free-turn-proxy-ios/releases/download/1.4.1/FreeTurnProxy.ipa",
-      "size": 9113970
+      "downloadURL": "https://github.com/tremendous-stimulus/free-turn-proxy-ios/releases/download/1.5.0/FreeTurnProxy.ipa",
+      "size": 9341960
     }
   ]
 }
