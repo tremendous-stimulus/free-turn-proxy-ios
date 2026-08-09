@@ -3,20 +3,19 @@ import SwiftUI
 struct MainTabView: View {
     @ObservedObject private var store = ConfigStore.shared
     @ObservedObject private var captcha = CaptchaController.shared
+    @Environment(\.scenePhase) private var scenePhase
     @State private var tab = 0
     @AppStorage(DefaultsKeys.telemetryOnboarded) private var onboarded = false
-    @State private var certDaysLeft: Int?
+    @State private var showRefreshBanner = false
     @State private var availableUpdate: String?
 
-    private static let warnThreshold = 3
-
     private enum ActiveBanner {
-        case cert(Int)
+        case refresh
         case update(String)
     }
 
     private var activeBannerKind: ActiveBanner? {
-        if let days = certDaysLeft, days <= Self.warnThreshold { return .cert(days) }
+        if showRefreshBanner { return .refresh }
         if let version = availableUpdate { return .update(version) }
         return nil
     }
@@ -25,7 +24,10 @@ struct MainTabView: View {
 
     @ViewBuilder private var activeBanner: some View {
         switch activeBannerKind {
-        case .cert(let days): CertExpiryBanner(daysLeft: days)
+        case .refresh: RefreshReminderBanner(onDismiss: {
+            RefreshReminder.dismissBanner()
+            showRefreshBanner = false
+        })
         case .update(let version): UpdateBanner(latestVersion: version)
         case nil: EmptyView()
         }
@@ -76,9 +78,13 @@ struct MainTabView: View {
                 }
             }
         }
-        .onAppear {
-            certDaysLeft = CertificateChecker.daysUntilExpiry()
-            Task { availableUpdate = await UpdateChecker.fetchLatestVersion() }
+        .onAppear { refreshChecks() }
+        .onChange(of: scenePhase) { phase in
+            // Приложение живёт сутками в фоне (AudioKeepAlive) — onAppear
+            // отрабатывает один раз за весь срок жизни процесса, поэтому
+            // периодика напоминания и проверка обновлений держатся на
+            // возврате в форграунд, а не только на первом запуске.
+            if phase == .active { refreshChecks() }
         }
         .alert("Сбор технических данных", isPresented: Binding(
             get: { !onboarded },
@@ -88,5 +94,10 @@ struct MainTabView: View {
         } message: {
             Text("Приложение анонимно отправляет технические логи подключения — это помогает находить и исправлять сбои. Личные данные не передаются.\n\nОтключить можно в настройках вкладки «Логи».")
         }
+    }
+
+    private func refreshChecks() {
+        showRefreshBanner = RefreshReminder.onForeground()
+        Task { availableUpdate = await UpdateChecker.fetchLatestVersion() }
     }
 }

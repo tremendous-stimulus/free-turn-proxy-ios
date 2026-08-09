@@ -12,4 +12,5 @@ enum DefaultsKeys {
     static let savedConfigsSelected = "savedConfigs.selected"
     static let telemetryOnboarded = "telemetry_onboarded"
     static let coreClientId = "core_client_id"
+    static let refreshBannerAnchorAt = "refresh_banner_anchor_at"
 }
