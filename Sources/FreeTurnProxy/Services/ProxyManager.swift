@@ -54,6 +54,8 @@ final class ProxyManager: ObservableObject {
     private var inRetryCycle = false
     private let lostNotifID = "tunnel-lost"
     private let recoveredNotifID = "tunnel-recovered"
+    private let gaveUpNotifID = "tunnel-gave-up"
+    private static let maxAutoReconnectAttempts = 5
 
     // Сколько секунд осталось до следующей попытки реконнекта. Обновляется раз
     // в секунду, чтобы UI мог показывать «Переподключаемся через X с».
@@ -94,6 +96,7 @@ final class ProxyManager: ObservableObject {
         backoffTickTimer = nil
         retryBackoffSeconds = 0
         inRetryCycle = false
+        CaptchaController.shared.resetPushSuppression()
         let persistLogs = UserDefaults.standard.object(forKey: DefaultsKeys.persistLogs) as? Bool ?? false
         if !persistLogs {
             ErrorLogger.shared.clear()
@@ -120,6 +123,8 @@ final class ProxyManager: ObservableObject {
         autoReconnectAttempt = 0
         everConnected = false
         inRetryCycle = false
+        CaptchaController.shared.resetPushSuppression()
+        CaptchaController.shared.hide()
         UNUserNotificationCenter.current()
             .removeDeliveredNotifications(withIdentifiers: [lostNotifID, recoveredNotifID])
         mobile.stop()
@@ -161,6 +166,7 @@ final class ProxyManager: ObservableObject {
         if st == .connected {
             everConnected = true
             autoReconnectAttempt = 0
+            CaptchaController.shared.resetPushSuppression()
             if inRetryCycle {
                 inRetryCycle = false
                 postRecoveredNotification()
@@ -220,6 +226,10 @@ final class ProxyManager: ObservableObject {
 
     private func triggerAutoReconnect() {
         guard isRunning, config != nil else { return }
+        if autoReconnectAttempt >= Self.maxAutoReconnectAttempts {
+            giveUpReconnecting()
+            return
+        }
         state = .retryBackoff
         connectedStreams = 0
         let delay = autoReconnectDelay()
@@ -258,6 +268,18 @@ final class ProxyManager: ObservableObject {
             // ждём следующий бекофф.
             triggerAutoReconnect()
         }
+    }
+
+    // Бюджет попыток исчерпан — гасим туннель вместо бесконечного бекоффа.
+    private func giveUpReconnecting() {
+        ErrorLogger.shared.appendAppLine(
+            level: "ERR",
+            message: "переподключение не удалось после \(Self.maxAutoReconnectAttempts) попыток, останавливаемся"
+        )
+        stop()
+        state = .error
+        errorMessage = "Не удалось переподключиться после \(Self.maxAutoReconnectAttempts) попыток"
+        postGaveUpNotification()
     }
 
     // Пуши шлём только когда пользователь не смотрит вкладку «Туннель» в
@@ -302,6 +324,16 @@ final class ProxyManager: ObservableObject {
         content.body = "Туннель снова доступен"
         content.sound = .default
         let req = UNNotificationRequest(identifier: recoveredNotifID, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req)
+    }
+
+    private func postGaveUpNotification() {
+        guard shouldPostStatusPush() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Подключение разорвано"
+        content.body = "Не удалось переподключиться после \(Self.maxAutoReconnectAttempts) попыток"
+        content.sound = .default
+        let req = UNNotificationRequest(identifier: gaveUpNotifID, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
     }
 

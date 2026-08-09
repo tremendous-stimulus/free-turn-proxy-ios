@@ -18,6 +18,7 @@ final class CaptchaController: NSObject, ObservableObject {
     @Published var isPresented = false
 
     private let notifID = "captcha-needed"
+    private(set) var captchaPushSent = false
 
     private override init() { super.init() }
 
@@ -35,10 +36,18 @@ final class CaptchaController: NSObject, ObservableObject {
             // В фоне (интент/автопереподключение) пользователь не увидит попап —
             // шлём пуш, по тапу вернёмся и откроем captcha. На любой вкладке
             // попап рисуется поверх (ZStack в MainTabView), пуш не нужен.
-            if UIApplication.shared.applicationState != .active {
+            // Один пуш на весь эпизод реконнекта: протухшую капчу Go запрашивает
+            // заново молча, повторный пуш не шлём (captchaPushSent сбрасывается
+            // только в ProxyManager при старте/остановке/восстановлении связи).
+            if UIApplication.shared.applicationState != .active && !self.captchaPushSent {
+                self.captchaPushSent = true
                 self.postNeedsCaptchaNotification()
             }
         }
+    }
+
+    func resetPushSuppression() {
+        captchaPushSent = false
     }
 
     func hide() {

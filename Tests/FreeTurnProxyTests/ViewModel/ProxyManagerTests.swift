@@ -165,4 +165,45 @@ final class ProxyManagerTests: XCTestCase {
         XCTAssertTrue(pm.isRunning)
         pm.stop()
     }
+
+    func test_autoReconnect_stopsAfterFiveAttempts() throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        for _ in 1...5 {
+            pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+            XCTAssertEqual(pm.state, .retryBackoff)
+            XCTAssertTrue(pm.isRunning)
+        }
+
+        // Шестой заход — провал пятой попытки, бюджет исчерпан.
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        XCTAssertEqual(pm.state, .error)
+        XCTAssertFalse(pm.isRunning)
+        XCTAssertTrue(mock.stopCalled)
+    }
+
+    func test_autoReconnect_successResetsAttemptBudget() throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        for _ in 1...3 {
+            pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        }
+        XCTAssertEqual(pm.state, .retryBackoff)
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        for _ in 1...5 {
+            pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+            XCTAssertEqual(pm.state, .retryBackoff, "Бюджет попыток должен был обнулиться на connected")
+            XCTAssertTrue(pm.isRunning)
+        }
+        pm.stop()
+    }
 }
