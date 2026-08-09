@@ -119,7 +119,7 @@ final class ErrorLoggerShipTests: XCTestCase {
     // MARK: – Buffer overflow: после ужима lastShippedIndex не должен пропускать новые строки
 
     // Регресс на «тихо потерянные» строки: после shipBatch индекс уехал к
-    // entries.count, потом appendAppLine/ingestGoLogs ужал буфер. Если индекс
+    // entries.count, потом appendAppLine ужал буфер. Если индекс
     // не сдвинуть на overflow, следующий shipBatch отправит пустой батч и
     // свежие строки уйдут в небытие. Используем mock 500 — файл остаётся на
     // диске после неудачной заливки, можно проверить через его содержимое.
@@ -134,9 +134,13 @@ final class ErrorLoggerShipTests: XCTestCase {
             }
             ErrorLogger.shared.shipBatch()
         }
-        // Ждём пока первый батч уйдёт на диск.
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        XCTAssertGreaterThanOrEqual(pendingFileCount(), 1, "первый батч должен лежать на диске")
+        // Ждём пока первый батч уйдёт на диск — фиксированный sleep здесь
+        // раньше плыл под нагрузкой на CI-раннере (uploadQueue отрабатывает
+        // асинхронно), поэтому ждём условие, а не время.
+        let firstBatchAppears = expectation(for: NSPredicate { [weak self] _, _ in
+            (self?.pendingFileCount() ?? 0) >= 1
+        }, evaluatedWith: nil)
+        await fulfillment(of: [firstBatchAppears], timeout: 8)
 
         let marker = "post-overflow-\(UUID().uuidString)"
         await MainActor.run {

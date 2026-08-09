@@ -97,6 +97,14 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    // Открыли freeturn://-ссылку (App/Info.plist регистрирует схему). Молча
+    // игнорируем повреждённую ссылку — как и у receiveFile, без алерта.
+    func receiveLink(_ url: URL) {
+        if let cfg = try? FreeturnLink.parse(url.absoluteString, defaultName: "Импортировано по ссылке") {
+            pendingImport = cfg
+        }
+    }
+
     func exportFile(_ c: SavedConfig) -> URL? {
         guard let data = try? ConfigCodec.encode(c) else { return nil }
         let safe = c.name.components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined()

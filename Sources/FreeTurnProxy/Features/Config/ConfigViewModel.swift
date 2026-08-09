@@ -17,6 +17,19 @@ final class ConfigViewModel: ObservableObject {
     // Шаг 1: валидируем сырой конфиг и показываем экран ввода названия.
     // Сам сканер ставит на паузу View (по showNaming) — здесь только данные.
     func stage(rawConfig text: String, defaultName: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // freeturn://-ссылка вместо WG-конфига (QR/галерея/файл могут нести и то,
+        // и другое) — импортируем как SavedConfig, минуя экран генерации .conf.
+        if trimmed.hasPrefix("\(FreeturnLink.scheme)://") {
+            do {
+                let cfg = try FreeturnLink.parse(trimmed, defaultName: defaultName)
+                inputError = nil
+                ConfigStore.shared.pendingImport = cfg
+            } catch {
+                inputError = error.localizedDescription
+            }
+            return
+        }
         guard text.contains("[Interface]"), text.contains("[Peer]") else {
             inputError = "Не похоже на WireGuard/AWG конфиг"
             return

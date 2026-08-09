@@ -3,13 +3,17 @@ import SwiftUI
 @MainActor
 final class TunnelViewModel: ObservableObject {
     let proxy = ProxyManager.shared
-    let store = ConfigStore.shared
+    let store: ConfigStore
 
     @Published var errorText: String?
     @Published var shareURL: URL?
+    @Published var shareLink: String?
+    // Тот же shareLink рендерится либо экраном с QR, либо текстовым share sheet.
+    @Published var shareLinkIsQR = false
 
-    // VK-ссылка (per-session) — персистится под прежним ключом.
-    @Published var link: String { didSet { d.set(link, forKey: DefaultsKeys.manualLink) } }
+    // VK-ссылки — общий пул для подключения, персистятся через ManualLinks.
+    // Правятся через VKLinksEditorView (кнопка «Редактировать VK-ссылки»).
+    @Published var links: [String] { didSet { ManualLinks.current = links } }
 
     // VK-логин для генерации ссылки.
     @Published var creatingCall = false
@@ -20,58 +24,53 @@ final class TunnelViewModel: ObservableObject {
         didSet { Keychain.set(vkAuthToken, for: vkTokenKey) }
     }
 
-    private let d = UserDefaults.standard
     private let vkTokenKey = Keychain.vkTokenAccount
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = .shared, store: ConfigStore = .shared) {
         self.session = session
-        link = d.string(forKey: DefaultsKeys.manualLink) ?? ""
+        self.store = store
+        links = ManualLinks.current
         vkAuthToken = Keychain.get(vkTokenKey)
-    }
-
-    // MARK: – Валидация
-
-    var linkError: String? {
-        let s = link.trimmingCharacters(in: .whitespaces)
-        guard !s.isEmpty else { return nil }
-        return Validators.vkLink(s) ? nil : "Ссылка вида https://vk.com/call/join/…"
     }
 
     var canConnect: Bool {
         guard let c = store.selected else { return false }
-        return !link.trimmingCharacters(in: .whitespaces).isEmpty
-            && linkError == nil
-            && Validators.endpoint(c.peer)
+        return !links.isEmpty && Validators.endpoint(c.peer)
     }
 
     // MARK: – VK
 
-    func createCall() async {
+    // Генерирует ровно count ссылок и возвращает их — не трогает links сама
+    // по себе. Вызывающая сторона (VKLinksEditorView) решает, что делать с
+    // результатом: там это черновой список, который применяется только по
+    // «Сохранить». Останавливается на первой ошибке, ничего не возвращая —
+    // частично сгенерированный набор никому не нужен.
+    func generateLinkBatch(count: Int) async -> [String]? {
         guard let token = vkAuthToken else {
             showVKWebFallback = true
-            return
+            return nil
         }
         creatingCall = true
         defer { creatingCall = false }
-        do {
-            link = try await vkCreateCall(token: token, session: session)
-        } catch {
-            // Сбрасываем токен только когда VK сам сказал, что он невалиден
-            // (error_code 5 — User authorization failed). Сетевые сбои и
-            // прочее не должны стирать сохранённый в Keychain токен.
-            if case VKCallError.apiError(5, _) = error {
-                vkAuthToken = nil
-                showVKWebFallback = true  // токен протух — сразу открываем логин
-                return
+        var created: [String] = []
+        for _ in 0..<max(1, count) {
+            do {
+                created.append(try await vkCreateCall(token: token, session: session))
+            } catch {
+                // Сбрасываем токен только когда VK сам сказал, что он невалиден
+                // (error_code 5 — User authorization failed). Сетевые сбои и
+                // прочее не должны стирать сохранённый в Keychain токен.
+                if case VKCallError.apiError(5, _) = error {
+                    vkAuthToken = nil
+                    showVKWebFallback = true  // токен протух — сразу открываем логин
+                    return nil
+                }
+                errorText = error.localizedDescription
+                return nil
             }
-            errorText = error.localizedDescription
         }
-    }
-
-    func onVKToken(_ token: String) {
-        vkAuthToken = token
-        Task { await createCall() }
+        return created
     }
 
     // MARK: – Подключение
@@ -96,5 +95,16 @@ final class TunnelViewModel: ObservableObject {
             return
         }
         shareURL = url
+    }
+
+    // cid и wg в исходящую ссылку не проставляем — см. FreeturnLink.encode.
+    func shareLinkText(_ c: SavedConfig) {
+        shareLink = FreeturnLink.encode(config: c, name: c.name)
+        shareLinkIsQR = false
+    }
+
+    func shareLinkQR(_ c: SavedConfig) {
+        shareLink = FreeturnLink.encode(config: c, name: c.name)
+        shareLinkIsQR = true
     }
 }

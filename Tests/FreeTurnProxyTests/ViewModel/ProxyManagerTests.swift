@@ -10,10 +10,10 @@ final class ProxyManagerTests: XCTestCase {
     }
 
     private func sampleConfig() -> FreeTurnConfig {
-        FreeTurnConfig(link: "https://vk.com/call/join/abc",
-                       peer: "1.2.3.4:12345",
-                       dns: "8.8.8.8",
-                       listen: "127.0.0.1:9000")
+        FreeTurnConfig(
+            config: SavedConfig(name: "test", peer: "1.2.3.4:12345", dns: "8.8.8.8", listen: "127.0.0.1:9000"),
+            links: ["https://vk.com/call/join/abc"]
+        )
     }
 
     // MARK: – start
@@ -43,6 +43,16 @@ final class ProxyManagerTests: XCTestCase {
         pm.stop()
     }
 
+    func test_start_sendsNonEmptyClientId() throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        let data = Data((mock.lastConfigJSON ?? "").utf8)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertFalse((json["clientId"] as? String ?? "").isEmpty)
+        pm.stop()
+    }
+
     // MARK: – stop
 
     func test_stop_resetsFlags() throws {
@@ -58,16 +68,10 @@ final class ProxyManagerTests: XCTestCase {
     }
 
     // MARK: – Авто-реконнект
-
-    // Polling-таймер тикает каждые 0.5с. Ждём кратные значения, чтобы успели
-    // отработать переходы. Все ожидания в этих тестах <= 4с.
-    private func waitUntil(_ cond: @escaping () -> Bool, timeout: TimeInterval = 3.0) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if cond() { return }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-    }
+    //
+    // Состояние теперь push-driven (EventSinkBridge.onState → ProxyManager.
+    // handleState), поэтому тесты дёргают handleState напрямую вместо того,
+    // чтобы выставлять mock.currentState и ждать поллинг-таймер.
 
     func test_autoReconnect_connectedThenError_entersRetryBackoff() async throws {
         let (pm, mock) = manager()
@@ -75,15 +79,10 @@ final class ProxyManagerTests: XCTestCase {
         try pm.start()
         XCTAssertEqual(mock.startCallCount, 1)
 
-        // Симулируем connected — polling зафиксирует everConnected=true.
-        mock.currentState = "connected"
-        await waitUntil { pm.state == .connected }
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
         XCTAssertEqual(pm.state, .connected)
 
-        // Теперь error — должен запустить триггер автоматического реконнекта.
-        mock.currentState = "error"
-        mock.currentErrMsg = "boom"
-        await waitUntil { pm.state == .retryBackoff }
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
 
         XCTAssertEqual(pm.state, .retryBackoff)
         XCTAssertTrue(pm.isRunning, "isRunning должен оставаться true, чтобы UI показывал кнопку «Отключиться»")
@@ -98,12 +97,11 @@ final class ProxyManagerTests: XCTestCase {
         try pm.start()
 
         // connected мы НЕ увидели → everConnected остаётся false.
-        mock.currentState = "connecting"
-        await waitUntil { pm.state == .connecting }
+        pm.handleState("connecting", streams: 0, total: 1, errMsg: "")
+        XCTAssertEqual(pm.state, .connecting)
 
         let startsBefore = mock.startCallCount
-        mock.currentState = "error"
-        await waitUntil { pm.state == .error || pm.state == .idle }
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
         XCTAssertFalse(pm.isRunning)
         XCTAssertEqual(mock.startCallCount, startsBefore, "Не должно быть авто-ретраев без предыдущего connected")
         XCTAssertNotEqual(pm.state, .retryBackoff)
@@ -115,17 +113,16 @@ final class ProxyManagerTests: XCTestCase {
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
 
-        mock.currentState = "connected"
-        await waitUntil { pm.state == .connected }
-        mock.currentState = "error"
-        await waitUntil { pm.state == .retryBackoff }
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        XCTAssertEqual(pm.state, .retryBackoff)
 
-        let startsBefore = mock.startCallCount
+        let restartsBefore = mock.restartCallCount
         pm.stop()
 
-        // Ждём дольше первого бекоффа — никаких новых start не должно произойти.
+        // Ждём дольше первого бекоффа — никакого рестарта случиться не должно.
         try? await Task.sleep(for: .milliseconds(1500))
-        XCTAssertEqual(mock.startCallCount, startsBefore, "Stop должен отменить цепочку ретраев")
+        XCTAssertEqual(mock.restartCallCount, restartsBefore, "Stop должен отменить цепочку ретраев")
         XCTAssertEqual(pm.state, .idle)
         XCTAssertEqual(pm.retryBackoffSeconds, 0)
     }
@@ -135,17 +132,19 @@ final class ProxyManagerTests: XCTestCase {
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
 
-        mock.currentState = "connected"
-        await waitUntil { pm.state == .connected }
-        let startsBefore = mock.startCallCount
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        let restartsBefore = mock.restartCallCount
 
-        mock.currentState = "error"
-        await waitUntil { pm.state == .retryBackoff }
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        XCTAssertEqual(pm.state, .retryBackoff)
 
-        // Ждём пока выполнится первый ретрай (бекофф 1с + 0.6с пауза между stop/start).
-        await waitUntil(timeout: 4.0) { mock.startCallCount > startsBefore }
-        XCTAssertGreaterThan(mock.startCallCount, startsBefore,
-                             "После бекоффа должен быть выполнен mobile.start заново")
+        // Ждём пока выполнится первый ретрай (бекофф ~1с).
+        let deadline = Date().addingTimeInterval(3.0)
+        while Date() < deadline, mock.restartCallCount == restartsBefore {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertGreaterThan(mock.restartCallCount, restartsBefore,
+                             "После бекоффа должен быть выполнен mobile.restart")
         pm.stop()
     }
 
@@ -154,19 +153,57 @@ final class ProxyManagerTests: XCTestCase {
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
 
-        // Полный цикл: connected → error → бекофф → опять connected.
-        mock.currentState = "connected"
-        await waitUntil { pm.state == .connected }
+        // Полный цикл: connected → error → бекофф → опять connected (пуш от
+        // ядра после того, как реконнект в фоне отработал).
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        XCTAssertEqual(pm.state, .retryBackoff)
 
-        mock.currentState = "error"
-        await waitUntil { pm.state == .retryBackoff }
-
-        // Имитируем что после ретрая туннель снова поднялся.
-        mock.currentState = "connected"
-        await waitUntil(timeout: 4.0) { pm.state == .connected }
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
 
         XCTAssertEqual(pm.state, .connected)
         XCTAssertTrue(pm.isRunning)
+        pm.stop()
+    }
+
+    func test_autoReconnect_stopsAfterFiveAttempts() throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        for _ in 1...5 {
+            pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+            XCTAssertEqual(pm.state, .retryBackoff)
+            XCTAssertTrue(pm.isRunning)
+        }
+
+        // Шестой заход — провал пятой попытки, бюджет исчерпан.
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        XCTAssertEqual(pm.state, .error)
+        XCTAssertFalse(pm.isRunning)
+        XCTAssertTrue(mock.stopCalled)
+    }
+
+    func test_autoReconnect_successResetsAttemptBudget() throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        for _ in 1...3 {
+            pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        }
+        XCTAssertEqual(pm.state, .retryBackoff)
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        for _ in 1...5 {
+            pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+            XCTAssertEqual(pm.state, .retryBackoff, "Бюджет попыток должен был обнулиться на connected")
+            XCTAssertTrue(pm.isRunning)
+        }
         pm.stop()
     }
 }

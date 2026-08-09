@@ -89,11 +89,11 @@ struct ConfigView: View {
         if let msg = vm.inputError {
             hintRow(icon: "xmark.circle.fill", tint: .red, text: msg, color: .red)
         } else if scanner.cameraAccessDenied {
-            Label("Разреши доступ к камере в Настройках", systemImage: "gearshape")
+            Label("Разрешите доступ к камере в Настройках", systemImage: "gearshape")
                 .font(.footnote).foregroundStyle(.secondary)
                 .padding(.top, 8)
         } else {
-            Text("Наведи камеру на QR-код конфигурации")
+            Text("Наведите камеру на QR-код конфигурации")
                 .font(.footnote).foregroundStyle(.secondary)
                 .padding(.top, 8)
         }

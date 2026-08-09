@@ -1,29 +1,34 @@
 import Foundation
 import Mobile
 
-// Прокладка над gomobile-биндингом. Прод использует LiveMobileAPI; тесты —
-// собственный мок. Сама логика по управлению туннелем остаётся в ProxyManager,
-// MobileAPI лишь делает вызовы Go проверяемыми.
+// Прокладка над gomobile-биндингом (ядро v2.1.1, JSON-конфиг + push EventSink).
+// Прод использует LiveMobileAPI; тесты — собственный мок. Сама логика по
+// управлению туннелем остаётся в ProxyManager, MobileAPI лишь делает вызовы
+// Go проверяемыми.
 protocol MobileAPI {
-    func setManualCaptcha(_ on: Bool)
-    func start(link: String, peer: String, dns: String, listen: String,
-               transport: String, obfKey: String, clientType: String) throws
+    func start(configJSON: String) throws
+    func restart(configJSON: String) throws
     func stop()
     func getState() -> MobileSnapshot?
-    func getLogs() -> String
+    func dumpLogs() -> String
     func clearLogs()
-    func setCaptchaPresenter(_ p: MobileCaptchaPresenterProtocol?)
+    func setEventSink(_ s: MobileEventSinkProtocol?)
+    func validateConfig(_ json: String) -> String
+    func version() -> String
 }
 
 struct LiveMobileAPI: MobileAPI {
-    func setManualCaptcha(_ on: Bool) {
-        MobileSetManualCaptcha(on)
+    func start(configJSON: String) throws {
+        var err: NSError?
+        MobileStart(configJSON, &err)
+        if let err { throw err }
     }
 
-    func start(link: String, peer: String, dns: String, listen: String,
-               transport: String, obfKey: String, clientType: String) throws {
+    // tunFD всегда 0 — свой tunnel.mode wg/awg недоступен без энтайтлмента
+    // packet-tunnel-provider, у нас tunnel.mode всегда "none".
+    func restart(configJSON: String) throws {
         var err: NSError?
-        MobileStart(link, peer, dns, listen, transport, obfKey, clientType, &err)
+        MobileRestart(configJSON, 0, &err)
         if let err { throw err }
     }
 
@@ -35,15 +40,23 @@ struct LiveMobileAPI: MobileAPI {
         MobileGetState()
     }
 
-    func getLogs() -> String {
-        MobileGetLogs()
+    func dumpLogs() -> String {
+        MobileDumpLogs()
     }
 
     func clearLogs() {
         MobileClearLogs()
     }
 
-    func setCaptchaPresenter(_ p: MobileCaptchaPresenterProtocol?) {
-        MobileSetCaptchaPresenter(p)
+    func setEventSink(_ s: MobileEventSinkProtocol?) {
+        MobileSetEventSink(s)
+    }
+
+    func validateConfig(_ json: String) -> String {
+        MobileValidateConfig(json)
+    }
+
+    func version() -> String {
+        MobileVersion()
     }
 }

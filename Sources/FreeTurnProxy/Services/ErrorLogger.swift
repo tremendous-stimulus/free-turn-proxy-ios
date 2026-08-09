@@ -29,7 +29,6 @@ final class ErrorLogger {
     // MARK: – Unified buffer (Main thread)
 
     private(set) var entries: [LogEntry] = []
-    private var lastGoLogLength = 0
     private var lastShippedIndex = 0
 
     // Кэп буфера держим скромным: при типичной нагрузке Go-биндинг шлёт логи
@@ -41,18 +40,20 @@ final class ErrorLogger {
 
     // MARK: – Ingestion
 
-    // Go logs: "HH:MM:SS [LEVEL] message" — время считается UTC (per spec).
-    func ingestGoLogs(_ fullLog: String) {
-        let newPart = String(fullLog.dropFirst(lastGoLogLength))
-        guard !newPart.isEmpty else { return }
-        lastGoLogLength = fullLog.count
+    // Уровни, с которыми ядро v2 шлёт EventSink.OnLog — маппим на прежние
+    // трёхбуквенные, чтобы не трогать Cloudflare Worker и дашборды Loki.
+    private static let levelMap: [String: String] = [
+        "debug": "DBG", "info": "INF", "warn": "WRN", "error": "ERR",
+    ]
 
-        let rawLines = newPart.components(separatedBy: "\n")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-
-        let parsed = rawLines.compactMap(Self.parseGoLine)
-        entries.append(contentsOf: parsed)
+    // Пуш от EventSinkBridge.onLog: уровень и время приходят уже готовыми,
+    // разбирать текст строки (как в v1.8.0) больше не нужно.
+    func ingest(level: String, message: String, unixMillis: Int64) {
+        let mapped = Self.levelMap[level] ?? level.uppercased()
+        let date = Date(timeIntervalSince1970: Double(unixMillis) / 1000)
+        let display = "\(Self.displayFmt.string(from: date)) [\(mapped)] \(message)"
+        let utcISO = Self.isoFmt.string(from: date)
+        entries.append(LogEntry(display: display, utcISO: utcISO, level: mapped, message: message))
         enforceMaxEntries()
     }
 
@@ -76,19 +77,12 @@ final class ErrorLogger {
         lastShippedIndex = max(0, lastShippedIndex - overflow)
     }
 
-    func resetGoPosition() { lastGoLogLength = 0 }
-
     func clear() {
         entries = []
-        lastGoLogLength = 0
         lastShippedIndex = 0
     }
 
-    // MARK: – Parsing
-
-    private static let goLineRegex = try! NSRegularExpression(
-        pattern: #"^(\d{2}):(\d{2}):(\d{2}) \[(DBG|INF|WRN|ERR)\] (.+)$"#
-    )
+    // MARK: – Форматтеры
 
     // Форматтер для отображения в локальной TZ (не задаём timeZone — берётся системная).
     private static let displayFmt: DateFormatter = {
@@ -98,64 +92,11 @@ final class ErrorLogger {
         return f
     }()
 
-    // UTC-форматтер для формирования времени из Go-строки.
-    private static let utcDisplayFmt: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "HH:mm:ss"
-        f.timeZone = TimeZone(identifier: "UTC")
-        return f
-    }()
-
     private static let isoFmt: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.timeZone = TimeZone(identifier: "UTC")
         return f
     }()
-
-    // Кешируем Calendar — создание Calendar затратно, но todayUTC вычисляется свежим при каждом вызове.
-    private static let utcCalendar: Calendar = {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "UTC")!
-        return cal
-    }()
-
-    static func parseGoLine(_ raw: String) -> LogEntry? {
-        let ns = raw as NSString
-        guard let m = goLineRegex.firstMatch(in: raw, range: NSRange(location: 0, length: ns.length)),
-              m.numberOfRanges == 6 else { return nil }
-
-        let hh = Int(ns.substring(with: m.range(at: 1))) ?? 0
-        let mm = Int(ns.substring(with: m.range(at: 2))) ?? 0
-        let ss = Int(ns.substring(with: m.range(at: 3))) ?? 0
-        let level = ns.substring(with: m.range(at: 4))
-        let message = ns.substring(with: m.range(at: 5))
-
-        // Собираем Date из компонентов в UTC (Go логирует в UTC).
-        let cal = utcCalendar
-        let todayUTC = cal.dateComponents([.year, .month, .day], from: Date())
-        var comps = DateComponents()
-        comps.timeZone = TimeZone(identifier: "UTC")
-        comps.year = todayUTC.year; comps.month = todayUTC.month; comps.day = todayUTC.day
-        comps.hour = hh; comps.minute = mm; comps.second = ss
-        guard var date = cal.date(from: comps) else { return nil }
-
-        // UTC-полночь: если собранная дата оказалась в будущем больше чем на 5 мин,
-        // значит лог был записан в прошлые сутки — сдвигаем назад на 1 день.
-        if date > Date().addingTimeInterval(300) {
-            date = cal.date(byAdding: .day, value: -1, to: date) ?? date
-        }
-
-        let displayTime = displayFmt.string(from: date)   // локальная TZ телефона
-        let utcISO = isoFmt.string(from: date)
-
-        return LogEntry(
-            display: "\(displayTime) [\(level)] \(message)",
-            utcISO: utcISO,
-            level: level,
-            message: message
-        )
-    }
 
     // MARK: – Ship
 

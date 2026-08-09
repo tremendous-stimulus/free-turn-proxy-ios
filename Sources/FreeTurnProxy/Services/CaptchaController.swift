@@ -2,7 +2,6 @@ import Foundation
 import SwiftUI
 import UIKit
 import UserNotifications
-import Mobile
 
 // Ручное решение VK Smart Captcha. Когда авто-решатель в Go не справился, он
 // поднимает локальный прокси VK-страницы и через gomobile зовёт show(url:) —
@@ -19,6 +18,7 @@ final class CaptchaController: NSObject, ObservableObject {
     @Published var isPresented = false
 
     private let notifID = "captcha-needed"
+    private(set) var captchaPushSent = false
 
     private override init() { super.init() }
 
@@ -36,10 +36,18 @@ final class CaptchaController: NSObject, ObservableObject {
             // В фоне (интент/автопереподключение) пользователь не увидит попап —
             // шлём пуш, по тапу вернёмся и откроем captcha. На любой вкладке
             // попап рисуется поверх (ZStack в MainTabView), пуш не нужен.
-            if UIApplication.shared.applicationState != .active {
+            // Один пуш на весь эпизод реконнекта: протухшую капчу Go запрашивает
+            // заново молча, повторный пуш не шлём (captchaPushSent сбрасывается
+            // только в ProxyManager при старте/остановке/восстановлении связи).
+            if UIApplication.shared.applicationState != .active && !self.captchaPushSent {
+                self.captchaPushSent = true
                 self.postNeedsCaptchaNotification()
             }
         }
+    }
+
+    func resetPushSuppression() {
+        captchaPushSent = false
     }
 
     func hide() {
@@ -82,22 +90,3 @@ extension CaptchaController: UNUserNotificationCenterDelegate {
     }
 }
 
-// Реализация gomobile-протокола MobileCaptchaPresenter (Go -> Swift колбэк).
-// В Swift протокол импортируется с суффиксом Protocol (одноимённый класс-обёртка
-// занимает имя MobileCaptchaPresenter).
-private final class CaptchaPresenterBridge: NSObject, MobileCaptchaPresenterProtocol {
-    func show(_ url: String?) { CaptchaController.shared.show(url ?? "") }
-    func hide() { CaptchaController.shared.hide() }
-}
-
-enum CaptchaBridge {
-    // Go хранит только ссылку на протокол — держим презентер живым здесь.
-    private static var presenter: CaptchaPresenterBridge?
-
-    static func register(mobile: MobileAPI = LiveMobileAPI()) {
-        let p = CaptchaPresenterBridge()
-        presenter = p
-        mobile.setCaptchaPresenter(p)
-        CaptchaController.shared.registerNotifications()
-    }
-}

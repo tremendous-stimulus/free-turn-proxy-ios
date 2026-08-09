@@ -39,4 +39,20 @@ enum Validators {
         return host == "vk.com" || host == "vk.ru"
             || host.hasSuffix(".vk.com") || host.hasSuffix(".vk.ru")
     }
+
+    static func obfProfile(_ s: String) -> Bool {
+        ["none", "rtpopus", "rtpopus2", "rtpopus3"].contains(s)
+    }
+
+    static func clientId(_ s: String) -> Bool {
+        hexKey(s, length: 32)
+    }
+
+    // Список через запятую; пусто — используем дефолт ядра.
+    static func dnsServers(_ s: String) -> Bool {
+        let parts = s.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return parts.allSatisfy { ipv4($0) }
+    }
 }

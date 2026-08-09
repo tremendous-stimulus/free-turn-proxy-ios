@@ -47,8 +47,10 @@ final class SmokeTests: XCTestCase {
         let addButton = app.buttons["Добавить конфигурацию"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
         addButton.tap()
-        XCTAssertTrue(app.buttons["Добавить вручную"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["Импортировать из файла"].exists)
+        XCTAssertTrue(app.buttons["Настроить вручную"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Ввести ссылку"].exists)
+        XCTAssertTrue(app.buttons["Сканировать QR"].exists)
+        XCTAssertTrue(app.buttons["Загрузить файл"].exists)
     }
 
     // MARK: – Логи
