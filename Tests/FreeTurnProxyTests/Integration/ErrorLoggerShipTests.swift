@@ -134,9 +134,13 @@ final class ErrorLoggerShipTests: XCTestCase {
             }
             ErrorLogger.shared.shipBatch()
         }
-        // Ждём пока первый батч уйдёт на диск.
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        XCTAssertGreaterThanOrEqual(pendingFileCount(), 1, "первый батч должен лежать на диске")
+        // Ждём пока первый батч уйдёт на диск — фиксированный sleep здесь
+        // раньше плыл под нагрузкой на CI-раннере (uploadQueue отрабатывает
+        // асинхронно), поэтому ждём условие, а не время.
+        let firstBatchAppears = expectation(for: NSPredicate { [weak self] _, _ in
+            (self?.pendingFileCount() ?? 0) >= 1
+        }, evaluatedWith: nil)
+        await fulfillment(of: [firstBatchAppears], timeout: 8)
 
         let marker = "post-overflow-\(UUID().uuidString)"
         await MainActor.run {
