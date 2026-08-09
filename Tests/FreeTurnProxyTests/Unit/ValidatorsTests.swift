@@ -144,4 +144,48 @@ final class ValidatorsTests: XCTestCase {
         XCTAssertFalse(Validators.vkLink(""))
         XCTAssertFalse(Validators.vkLink("vk.com/call/join/abc"))
     }
+
+    // MARK: – obfProfile
+
+    func test_obfProfile_acceptsKnownProfiles() {
+        XCTAssertTrue(Validators.obfProfile("none"))
+        XCTAssertTrue(Validators.obfProfile("rtpopus"))
+        XCTAssertTrue(Validators.obfProfile("rtpopus2"))
+        XCTAssertTrue(Validators.obfProfile("rtpopus3"))
+    }
+
+    func test_obfProfile_rejectsUnknown() {
+        XCTAssertFalse(Validators.obfProfile("rtpopus4"))
+        XCTAssertFalse(Validators.obfProfile(""))
+    }
+
+    // MARK: – clientId
+
+    func test_clientId_accepts32Hex() {
+        XCTAssertTrue(Validators.clientId(String(repeating: "a", count: 32)))
+    }
+
+    func test_clientId_rejectsWrongLength() {
+        XCTAssertFalse(Validators.clientId(String(repeating: "a", count: 64)))
+        XCTAssertFalse(Validators.clientId(""))
+    }
+
+    // MARK: – dnsServers
+
+    func test_dnsServers_acceptsEmpty() {
+        XCTAssertTrue(Validators.dnsServers(""))
+        XCTAssertTrue(Validators.dnsServers("   "))
+    }
+
+    func test_dnsServers_acceptsSingleIPv4() {
+        XCTAssertTrue(Validators.dnsServers("8.8.8.8"))
+    }
+
+    func test_dnsServers_acceptsCommaSeparatedList() {
+        XCTAssertTrue(Validators.dnsServers("8.8.8.8, 1.1.1.1 ,9.9.9.9"))
+    }
+
+    func test_dnsServers_rejectsIfAnyEntryInvalid() {
+        XCTAssertFalse(Validators.dnsServers("8.8.8.8, not-an-ip"))
+    }
 }

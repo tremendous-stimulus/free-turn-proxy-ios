@@ -10,10 +10,10 @@ final class ProxyManagerTests: XCTestCase {
     }
 
     private func sampleConfig() -> FreeTurnConfig {
-        FreeTurnConfig(link: "https://vk.com/call/join/abc",
-                       peer: "1.2.3.4:12345",
-                       dns: "8.8.8.8",
-                       listen: "127.0.0.1:9000")
+        FreeTurnConfig(
+            config: SavedConfig(name: "test", peer: "1.2.3.4:12345", dns: "8.8.8.8", listen: "127.0.0.1:9000"),
+            links: ["https://vk.com/call/join/abc"]
+        )
     }
 
     // MARK: – start

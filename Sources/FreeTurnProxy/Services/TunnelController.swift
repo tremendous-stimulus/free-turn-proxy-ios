@@ -21,9 +21,10 @@ enum TunnelController {
         }
     }
 
-    static var link: String {
-        UserDefaults.standard.string(forKey: DefaultsKeys.manualLink)?
-            .trimmingCharacters(in: .whitespaces) ?? ""
+    static var links: [String] {
+        ManualLinks.current
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     // Поднимает туннель. Возврат сразу после успешного старта; готовность
@@ -32,19 +33,10 @@ enum TunnelController {
         let proxy = ProxyManager.shared
         guard !proxy.isRunning else { return }
         guard let c = ConfigStore.shared.selected else { throw TunnelError.noSelectedConfig }
-        let link = link
-        guard !link.isEmpty else { throw TunnelError.noLink }
+        let links = links
+        guard !links.isEmpty else { throw TunnelError.noLink }
 
-        var cfg = FreeTurnConfig(
-            link: link,
-            peer: c.peer,
-            dns: c.dns.isEmpty ? nil : c.dns,
-            listen: c.listen.isEmpty ? nil : c.listen
-        )
-        cfg.transport = c.transport
-        cfg.obfKey = c.obfKey
-        cfg.manualCaptcha = c.manualCaptcha
-        proxy.loadConfig(cfg, fileName: c.name)
+        proxy.loadConfig(FreeTurnConfig(config: c, links: links), fileName: c.name)
         do {
             try proxy.start()
         } catch {

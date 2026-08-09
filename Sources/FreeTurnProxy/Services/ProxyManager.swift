@@ -59,7 +59,7 @@ final class ProxyManager: ObservableObject {
     // в секунду, чтобы UI мог показывать «Переподключаемся через X с».
     @Published var retryBackoffSeconds: Int = 0
 
-    var serverAddress: String { config?.peer ?? "" }
+    var serverAddress: String { config?.config.peer ?? "" }
 
     private init() {
         self.mobile = LiveMobileAPI()
@@ -139,25 +139,11 @@ final class ProxyManager: ObservableObject {
     // фоновой очереди пока незачем. Понадобится, когда появится поддержка
     // subUrl.
     private func startMobile(_ cfg: FreeTurnConfig) throws {
-        try mobile.start(configJSON: coreConfig(for: cfg).encodedJSON())
+        try mobile.start(configJSON: CoreConfigBuilder.build(config: cfg.config, links: cfg.links).encodedJSON())
     }
 
     private func restartMobile(_ cfg: FreeTurnConfig) throws {
-        try mobile.restart(configJSON: coreConfig(for: cfg).encodedJSON())
-    }
-
-    // Профиль обфускации пока не настраиваем из UI (см. Этап B плана) —
-    // если ключ задан, используем rtpopus как и v1.8.0-биндинг делал раньше.
-    private func coreConfig(for cfg: FreeTurnConfig) -> CoreConfig {
-        var c = CoreConfig(peer: cfg.peer, clientId: ClientIdentity.current)
-        c.turn.transport = cfg.transport
-        c.vk.links = [cfg.link]
-        c.vk.manualCaptcha = cfg.manualCaptcha
-        c.obf.profile = cfg.obfKey.isEmpty ? "none" : "rtpopus"
-        c.obf.key = cfg.obfKey
-        if let listen = cfg.listen, !listen.isEmpty { c.proxy.listen = listen }
-        if let dns = cfg.dns, !dns.isEmpty { c.dns.servers = [dns] }
-        return c
+        try mobile.restart(configJSON: CoreConfigBuilder.build(config: cfg.config, links: cfg.links).encodedJSON())
     }
 
     // MARK: – Push от EventSinkBridge

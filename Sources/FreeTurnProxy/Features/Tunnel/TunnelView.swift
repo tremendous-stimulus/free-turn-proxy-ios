@@ -9,14 +9,15 @@ struct TunnelView: View {
     @State private var pendingDelete: SavedConfig?
     @State private var showUndo = false
     @State private var showImportPicker = false
+    @State private var showLinksEditor = false
     @Environment(\.isBannerVisible) private var isBannerVisible
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    vkLinkField
                     configsSection
+                    editLinksButton
                     if let c = store.selected {
                         activeConfigSection(c)
                     }
@@ -42,6 +43,11 @@ struct TunnelView: View {
             }
             .sheet(isPresented: .isNotNil($vm.shareURL)) {
                 if let url = vm.shareURL { ShareSheet(items: [url]) }
+            }
+            .sheet(isPresented: $showLinksEditor) {
+                VKLinksEditorView(initialLinks: vm.links, vm: vm) { newLinks in
+                    vm.links = newLinks
+                }
             }
             .fileImporter(
                 isPresented: $showImportPicker,
@@ -129,39 +135,16 @@ struct TunnelView: View {
 
     // MARK: – VK link
 
-    private var vkLinkField: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                Label("VK звонок", systemImage: "link")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                TextField("Вставьте ссылку или сгенерируйте", text: $vm.link)
-                    .textFieldStyle(.roundedBorder)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .disabled(proxy.isRunning)
-                if let e = vm.linkError {
-                    FieldError(e)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("link-validation-error")
-                }
-            }
-            Button {
-                Task { await vm.createCall() }
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Сгенерировать ссылку")
-                }
+    private var editLinksButton: some View {
+        Button {
+            showLinksEditor = true
+        } label: {
+            Label("Редактировать VK-ссылки", systemImage: "link.badge.plus")
                 .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .disabled(vm.creatingCall || proxy.isRunning)
-            .sheet(isPresented: $vm.showVKWebFallback) {
-                VKAuthSheet { token in vm.onVKToken(token) }
-            }
         }
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .disabled(proxy.isRunning)
     }
 
     // MARK: – Saved configs

@@ -1,7 +1,8 @@
 import Foundation
 
 enum DefaultsKeys {
-    static let manualLink = "manualLink"
+    static let manualLink = "manualLink"       // legacy — одна ссылка, мигрируется в manualLinks
+    static let manualLinks = "manualLinks.v1"
     static let telemetryEnabled = "telemetry_enabled"
     static let persistLogs = "persist_logs"
     static let errorLoggerClientId = "error_logger_client_id"

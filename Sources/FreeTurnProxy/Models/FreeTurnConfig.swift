@@ -1,13 +1,11 @@
 import Foundation
 
+// Runtime-конфигурация активного туннеля: сохранённая конфигурация сервера +
+// список VK-ссылок (задаются отдельно от SavedConfig, см. TunnelController /
+// ManualLinks). Единая точка сборки CoreConfig из этой пары — CoreConfigBuilder.
 struct FreeTurnConfig {
-    // Ссылку на VK-звонок в файле не храним — она всегда берётся из инпута
-    // «Ссылка на VK звонок» и проставляется при загрузке.
-    var link: String = ""
-    let peer: String
-    let dns: String?
-    let listen: String?
-    var transport: String = "tcp"
-    var obfKey: String = ""
-    var manualCaptcha: Bool = false
+    var config: SavedConfig
+    var links: [String]
+
+    var peer: String { config.peer }
 }
