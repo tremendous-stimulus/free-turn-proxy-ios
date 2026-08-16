@@ -21,6 +21,13 @@ final class ProxyManager: ObservableObject {
     @Published var txRateBytesPerSec: Int64 = 0
     @Published var rxRateBytesPerSec: Int64 = 0
 
+    // Локальная половина дороги (план, фаза 2, WG-in-WG) — независимый от
+    // внешнего state статус: реконнект external-половины её не трогает, см.
+    // startLocalTunnelIfNeeded. Для старого режима (useLocalTunnel == false)
+    // остаётся false/0, UI показывает только один статус, как раньше.
+    @Published var localTunnelUp = false
+    @Published var localTunnelHandshakeAgeSec: Int64 = 0
+
     private var config: FreeTurnConfig?
     private var statsTimer: Timer?
     private var logShipTimer: Timer?   // ship unified buffer → worker (10s)
@@ -28,9 +35,20 @@ final class ProxyManager: ObservableObject {
     private var lastLoggedError = ""
     private let audio = AudioKeepAlive()
     private let mobile: MobileAPI
+    private let ftun: FtunAPI
+    private let localTunnelProfiles: LocalTunnelProfileStoring
 
     private static let probeInterval: TimeInterval = 5
     private static let probeURL = URL(string: "http://captive.apple.com")!
+
+    // WG-in-WG (план, фаза 2): локальный responder слушает 127.0.0.1:9000,
+    // апстрим-релей переезжает на 127.0.0.1:9001 (см. SavedConfig.listen,
+    // должен быть выставлен на этот адрес при сборке конфига с
+    // useLocalTunnel). ftun поднимается один раз за сессию — после первого
+    // connected — и не трогается реконнектом внешней половины.
+    private static let localResponderPort = 9000
+    private static let relayAddrForLocalTunnel = "127.0.0.1:9001"
+    private var ftunStarted = false
 
     // Реконнект-цикл стартует из трёх мест, все идут через enterRetryCycle():
     //   • Go выдал error из connected (push через EventSink.onState);
@@ -65,11 +83,16 @@ final class ProxyManager: ObservableObject {
 
     private init() {
         self.mobile = LiveMobileAPI()
+        self.ftun = LiveFtunAPI()
+        self.localTunnelProfiles = KeychainLocalTunnelProfileStore()
     }
 
-    // Инжектируемый init — для тестов с MockMobileAPI.
-    init(mobile: MobileAPI) {
+    // Инжектируемый init — для тестов с MockMobileAPI/MockFtunAPI.
+    init(mobile: MobileAPI, ftun: FtunAPI = LiveFtunAPI(),
+         localTunnelProfiles: LocalTunnelProfileStoring = KeychainLocalTunnelProfileStore()) {
         self.mobile = mobile
+        self.ftun = ftun
+        self.localTunnelProfiles = localTunnelProfiles
     }
 
     func loadConfig(_ config: FreeTurnConfig, fileName: String) {
@@ -96,6 +119,7 @@ final class ProxyManager: ObservableObject {
         backoffTickTimer = nil
         retryBackoffSeconds = 0
         inRetryCycle = false
+        ftunStarted = false
         CaptchaController.shared.resetPushSuppression()
         let persistLogs = UserDefaults.standard.object(forKey: DefaultsKeys.persistLogs) as? Bool ?? false
         if !persistLogs {
@@ -127,6 +151,12 @@ final class ProxyManager: ObservableObject {
         CaptchaController.shared.hide()
         UNUserNotificationCenter.current()
             .removeDeliveredNotifications(withIdentifiers: [lostNotifID, recoveredNotifID])
+        if ftunStarted {
+            ftun.stop()
+            ftunStarted = false
+        }
+        localTunnelUp = false
+        localTunnelHandshakeAgeSec = 0
         mobile.stop()
         audio.stop()
         isRunning = false
@@ -151,6 +181,32 @@ final class ProxyManager: ObservableObject {
         try mobile.restart(configJSON: CoreConfigBuilder.build(config: cfg.config, links: cfg.links).encodedJSON())
     }
 
+    // Вторая половина дороги (план, фаза 2): поднимается один раз за сессию,
+    // после первого connected внешней половины — реконнект mobile её не
+    // трогает, в этом весь смысл развязки. Не blocking: ошибка тут не должна
+    // рушить уже поднятый внешний туннель, только логируется.
+    private func startLocalTunnelIfNeeded() {
+        guard !ftunStarted, let config, config.config.useLocalTunnel,
+              let profileID = config.config.wgProfileID,
+              let profile = localTunnelProfiles.load(profileID) else { return }
+        do {
+            let req = FtunStartRequest(
+                remoteConf: profile.remoteConfText,
+                localPrivateKey: profile.serverPrivateKey,
+                localPeerPublicKey: profile.clientPublicKey,
+                relayAddr: Self.relayAddrForLocalTunnel,
+                listenPort: Self.localResponderPort,
+                mtu: LocalConfigBuilder.mtu
+            )
+            try ftun.start(configJSON: req.encodedJSON())
+            ftunStarted = true
+        } catch {
+            ErrorLogger.shared.appendAppLine(
+                level: "ERR", message: "локальный туннель не поднялся: \(error.localizedDescription)"
+            )
+        }
+    }
+
     // MARK: – Push от EventSinkBridge
 
     // Единственный источник TunnelState теперь — этот метод (вызывается из
@@ -171,6 +227,7 @@ final class ProxyManager: ObservableObject {
                 inRetryCycle = false
                 postRecoveredNotification()
             }
+            startLocalTunnelIfNeeded()
         }
 
         // Пишем ошибку в единый буфер когда она появляется впервые.
@@ -348,6 +405,12 @@ final class ProxyManager: ObservableObject {
                 self.rxTotalBytes = snap?.rxTotal ?? 0
                 self.txRateBytesPerSec = snap?.txRate ?? 0
                 self.rxRateBytesPerSec = snap?.rxRate ?? 0
+            }
+            guard self.ftunStarted else { return }
+            let ftunSnap = self.ftun.stats()
+            DispatchQueue.main.async {
+                self.localTunnelUp = ftunSnap?.localUp ?? false
+                self.localTunnelHandshakeAgeSec = ftunSnap?.localHandshakeAgeSec ?? 0
             }
         }
         logShipTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in

@@ -26,11 +26,18 @@ struct SavedConfig: Identifiable, Codable, Equatable {
     var debug: Bool = false
     var clientId: String = ""              // непустой = cid, пришедший из freeturn://-ссылки
 
+    // WG-in-WG (план vpn-lexical-rossum.md, фаза 2): реальный конфиг и ключи
+    // живут в LocalTunnelProfileStore (Keychain), здесь — только ссылка.
+    // false/nil = старый режим, транспарентный релей на 127.0.0.1:9000.
+    var useLocalTunnel: Bool = false
+    var wgProfileID: UUID?
+
     init(id: UUID = UUID(), name: String, peer: String, obfKey: String = "", dns: String = "",
          listen: String = "", transport: String = "udp", manualCaptcha: Bool = false,
          obfProfile: String? = nil, obfTimingMs: Int = 0, mode: String = "udp", bond: Bool = false,
          threads: Int = 0, streamsPerCred: Int = 0, dnsMode: String = "auto", turnHost: String = "",
-         turnPort: String = "", debug: Bool = false, clientId: String = "") {
+         turnPort: String = "", debug: Bool = false, clientId: String = "",
+         useLocalTunnel: Bool = false, wgProfileID: UUID? = nil) {
         self.id = id
         self.name = name
         self.peer = peer
@@ -52,12 +59,14 @@ struct SavedConfig: Identifiable, Codable, Equatable {
         self.turnPort = turnPort
         self.debug = debug
         self.clientId = clientId
+        self.useLocalTunnel = useLocalTunnel
+        self.wgProfileID = wgProfileID
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, peer, obfKey, dns, listen, transport, manualCaptcha,
              obfProfile, obfTimingMs, mode, bond, threads, streamsPerCred,
-             dnsMode, turnHost, turnPort, debug, clientId
+             dnsMode, turnHost, turnPort, debug, clientId, useLocalTunnel, wgProfileID
     }
 
     // Записи, сохранённые до Этапа B, не знают про новые поля —
@@ -89,5 +98,7 @@ struct SavedConfig: Identifiable, Codable, Equatable {
         turnPort = try c.decodeIfPresent(String.self, forKey: .turnPort) ?? ""
         debug = try c.decodeIfPresent(Bool.self, forKey: .debug) ?? false
         clientId = try c.decodeIfPresent(String.self, forKey: .clientId) ?? ""
+        useLocalTunnel = try c.decodeIfPresent(Bool.self, forKey: .useLocalTunnel) ?? false
+        wgProfileID = try c.decodeIfPresent(UUID.self, forKey: .wgProfileID)
     }
 }

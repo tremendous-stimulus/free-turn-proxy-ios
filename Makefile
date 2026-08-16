@@ -6,25 +6,32 @@ GO_REPO ?= https://github.com/samosvalishe/free-turn-proxy
 GO_REF  ?= v2.1.1
 SRC_DIR := .framework-src
 
-.PHONY: framework ftun project open clean all
+.PHONY: framework project open clean all
 
-# 1. Собрать Go-фреймворк апстрима (нужен gomobile + task: brew install go-task)
+# 1. Собрать Go-фреймворк: апстрим (mobile) + наш WG-in-WG модуль (golib/ftun,
+# план vpn-lexical-rossum.md, фаза 1) — ОДНИМ gomobile bind в ОДИН
+# xcframework. Обязательно: два gomobile-биндинга, собранные раздельно,
+# зашивают каждый свой встроенный Go-рантайм, и при совместной линковке
+# падают с SIGSEGV в рантайм-бутстрапе, как только реально исполняется код из
+# обеих половин (см. план, «Фаза 1.5 — блокер», подтверждено минимальным
+# репро) — держит их в одном рантайме именно совместная сборка одним
+# вызовом gomobile bind, поэтому ftun копируется как sibling-пакет в
+# склонированное дерево апстрима, а не собирается отдельно.
+# GO_REPO/GO_REF по-прежнему пинят апстрим-сторону; golib/ftun — наш код,
+# правки в нём подхватятся при следующей сборке без смены GO_REF.
 framework:
 	rm -rf $(SRC_DIR)
 	git clone --depth 1 --branch $(GO_REF) $(GO_REPO) $(SRC_DIR)
-	cd $(SRC_DIR) && task build:ios
+	rm -rf $(SRC_DIR)/ftun
+	cp -R golib/ftun $(SRC_DIR)/ftun
+	rm -f $(SRC_DIR)/ftun/*_test.go
+	cd $(SRC_DIR) && go get -tool golang.org/x/mobile/cmd/gobind && go mod tidy
+	cd $(SRC_DIR) && gomobile bind -target ios,iossimulator -ldflags "-checklinkname=0" \
+		-o dist/Mobile.xcframework ./mobile ./ftun
 	rm -rf Frameworks/Mobile.xcframework
 	mkdir -p Frameworks
 	cp -R $(SRC_DIR)/dist/Mobile.xcframework Frameworks/
 	rm -rf $(SRC_DIR)
-
-# 1b. Собрать наш собственный WG-in-WG модуль (golib/ftun, план
-# vpn-lexical-rossum.md, фаза 1) — отдельный gomobile-таргет, свой код,
-# GO_REF апстрима на него не влияет.
-ftun:
-	rm -rf Frameworks/Ftun.xcframework
-	mkdir -p Frameworks
-	cd golib && gomobile bind -target=ios -o ../Frameworks/Ftun.xcframework ./ftun
 
 # 2. Сгенерировать .xcodeproj (нужен xcodegen: brew install xcodegen)
 project:
@@ -35,7 +42,7 @@ open:
 	open FreeTurnProxy.xcodeproj
 
 # Всё сразу
-all: framework ftun project open
+all: framework project open
 
 clean:
 	rm -rf Frameworks FreeTurnProxy.xcodeproj $(SRC_DIR)

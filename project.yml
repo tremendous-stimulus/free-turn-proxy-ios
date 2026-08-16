@@ -30,9 +30,6 @@ targets:
       - framework: Frameworks/Mobile.xcframework
         embed: true
         codeSign: true
-      - framework: Frameworks/Ftun.xcframework
-        embed: true
-        codeSign: true
 
   # Тестовая сборка: отдельный bundle id + имя «Free Turn Test» + иконка с
   # плашкой TEST. Ставится рядом с продом, не конфликтует. Используется как
@@ -61,9 +58,6 @@ targets:
       - framework: Frameworks/Mobile.xcframework
         embed: true
         codeSign: true
-      - framework: Frameworks/Ftun.xcframework
-        embed: true
-        codeSign: true
 
   # Регресс-тесты (XCTest). Хост — основное приложение. Не подписываются
   # (CODE_SIGNING_ALLOWED=NO) — гоняются на симуляторе.
@@ -75,8 +69,6 @@ targets:
     dependencies:
       - target: FreeTurnProxy
       - framework: Frameworks/Mobile.xcframework
-        embed: false
-      - framework: Frameworks/Ftun.xcframework
         embed: false
     settings:
       base:

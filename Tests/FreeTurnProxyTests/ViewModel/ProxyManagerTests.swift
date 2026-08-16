@@ -9,10 +9,24 @@ final class ProxyManagerTests: XCTestCase {
         return (ProxyManager(mobile: mock), mock)
     }
 
+    private func managerWithFtun() -> (ProxyManager, MockMobileAPI, MockFtunAPI, InMemoryLocalTunnelProfileStore) {
+        let mobile = MockMobileAPI()
+        let ftun = MockFtunAPI()
+        let store = InMemoryLocalTunnelProfileStore()
+        return (ProxyManager(mobile: mobile, ftun: ftun, localTunnelProfiles: store), mobile, ftun, store)
+    }
+
     private func sampleConfig() -> FreeTurnConfig {
         FreeTurnConfig(
             config: SavedConfig(name: "test", peer: "1.2.3.4:12345", dns: "8.8.8.8", listen: "127.0.0.1:9000"),
             links: ["https://vk.com/call/join/abc"]
+        )
+    }
+
+    private func sampleProfile(id: UUID) -> LocalTunnelProfile {
+        LocalTunnelProfile(
+            id: id, remoteConfText: "conf", serverPrivateKey: "sPriv", serverPublicKey: "sPub",
+            clientPrivateKey: "cPriv", clientPublicKey: "cPub", address: "10.0.0.2/32", dns: "8.8.8.8"
         )
     }
 
@@ -204,6 +218,100 @@ final class ProxyManagerTests: XCTestCase {
             XCTAssertEqual(pm.state, .retryBackoff, "Бюджет попыток должен был обнулиться на connected")
             XCTAssertTrue(pm.isRunning)
         }
+        pm.stop()
+    }
+
+    // MARK: – WG-in-WG (план, фаза 2)
+
+    func test_localTunnel_startsAfterFirstConnected() throws {
+        let (pm, _, ftun, store) = managerWithFtun()
+        let profileID = UUID()
+        store.save(sampleProfile(id: profileID))
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true
+        cfg.config.wgProfileID = profileID
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+
+        XCTAssertFalse(ftun.startCalled, "ftun не должен стартовать до первого connected")
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        XCTAssertTrue(ftun.startCalled)
+        XCTAssertEqual(ftun.startCallCount, 1)
+        pm.stop()
+    }
+
+    func test_localTunnel_notStarted_whenUseLocalTunnelFalse() throws {
+        let (pm, _, ftun, _) = managerWithFtun()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        XCTAssertFalse(ftun.startCalled)
+        pm.stop()
+    }
+
+    func test_localTunnel_startsOnceAcrossReconnects() throws {
+        let (pm, _, ftun, store) = managerWithFtun()
+        let profileID = UUID()
+        store.save(sampleProfile(id: profileID))
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true
+        cfg.config.wgProfileID = profileID
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        XCTAssertEqual(ftun.startCallCount, 1, "ftun не перезапускается реконнектом внешней половины")
+        pm.stop()
+    }
+
+    func test_localTunnel_stoppedOnStop() throws {
+        let (pm, _, ftun, store) = managerWithFtun()
+        let profileID = UUID()
+        store.save(sampleProfile(id: profileID))
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true
+        cfg.config.wgProfileID = profileID
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        pm.stop()
+        XCTAssertEqual(ftun.stopCallCount, 1)
+    }
+
+    func test_localTunnel_missingProfile_doesNotCrashOrStartFtun() throws {
+        let (pm, _, ftun, _) = managerWithFtun()
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true
+        cfg.config.wgProfileID = UUID()   // профиля в сторе нет
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        XCTAssertFalse(ftun.startCalled)
+        pm.stop()
+    }
+
+    func test_localTunnel_startSendsExpectedFields() throws {
+        let (pm, _, ftun, store) = managerWithFtun()
+        let profileID = UUID()
+        store.save(sampleProfile(id: profileID))
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true
+        cfg.config.wgProfileID = profileID
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        let data = Data((ftun.lastConfigJSON ?? "").utf8)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["remoteConf"] as? String, "conf")
+        XCTAssertEqual(json["localPrivateKey"] as? String, "sPriv")
+        XCTAssertEqual(json["localPeerPublicKey"] as? String, "cPub")
+        XCTAssertEqual(json["relayAddr"] as? String, "127.0.0.1:9001")
+        XCTAssertEqual(json["listenPort"] as? Int, 9000)
         pm.stop()
     }
 }

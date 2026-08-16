@@ -7,6 +7,8 @@ struct FreeTurnProxyApp: App {
         Keychain.wipeSecretsOnFreshInstall()
         // Регистрируем push-приёмник событий ядра (стадия, логи, captcha).
         EventSinkBridge.register()
+        // Логи локального WG-in-WG модуля (golib/ftun).
+        FtunEventSinkBridge.register()
         // Отправляем логи ошибок прошлых сессий, если есть сеть.
         ErrorLogger.shared.flushOnLaunch()
     }

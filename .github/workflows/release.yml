@@ -38,8 +38,6 @@ jobs:
 
       - uses: ./.github/actions/build-mobile-framework
 
-      - uses: ./.github/actions/build-ftun-framework
-
       - uses: ./.github/actions/install-xcode-tools
         with:
           packages: xcodegen jq

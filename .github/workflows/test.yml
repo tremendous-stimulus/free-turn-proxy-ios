@@ -27,8 +27,6 @@ jobs:
 
       - uses: ./.github/actions/build-mobile-framework
 
-      - uses: ./.github/actions/build-ftun-framework
-
       # xcbeautify нужен для красивого лога + генерации JUnit XML, который потом
       # рендерит dorny/test-reporter как отдельный check на странице run'а.
       - uses: ./.github/actions/install-xcode-tools
@@ -99,8 +97,6 @@ jobs:
           xcode-version: latest-stable
 
       - uses: ./.github/actions/build-mobile-framework
-
-      - uses: ./.github/actions/build-ftun-framework
 
       - uses: ./.github/actions/install-xcode-tools
         with:
