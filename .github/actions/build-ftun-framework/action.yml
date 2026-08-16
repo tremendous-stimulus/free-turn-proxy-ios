@@ -1,0 +1,42 @@
+name: Build ftun framework + cache
+description: >
+  Собирает Frameworks/Ftun.xcframework (golib/ftun, свой WG-in-WG модуль — план
+  vpn-lexical-rossum.md, фаза 1) через gomobile, с кешем по hash(golib/**).
+  На cache hit три внутренних шага пропускаются. На cache miss ставит Go+gomobile,
+  собирает фреймворк и сохраняет в кеш сразу после сборки — даже если
+  последующие шаги job упадут.
+
+runs:
+  using: composite
+  steps:
+    - name: Restore cache
+      id: cache-fw
+      uses: actions/cache/restore@v4
+      with:
+        path: Frameworks/Ftun.xcframework
+        key: ftun-xcframework-${{ hashFiles('golib/**') }}
+
+    - name: Set up Go
+      if: steps.cache-fw.outputs.cache-hit != 'true'
+      uses: actions/setup-go@v5
+      with:
+        go-version: 'stable'
+        cache: false
+
+    - name: Build framework
+      if: steps.cache-fw.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        go install golang.org/x/mobile/cmd/gomobile@latest
+        export PATH="$(go env GOPATH)/bin:$PATH"
+        gomobile init
+        make ftun
+
+    # if: always() — сохраняем фреймворк сразу после сборки, чтобы падение
+    # шагов ниже по job не сожрало время пересбора в следующий ран.
+    - name: Save cache
+      if: always() && steps.cache-fw.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: Frameworks/Ftun.xcframework
+        key: ftun-xcframework-${{ hashFiles('golib/**') }}
