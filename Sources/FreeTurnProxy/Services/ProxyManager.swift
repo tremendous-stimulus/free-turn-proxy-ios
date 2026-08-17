@@ -50,14 +50,18 @@ final class ProxyManager: ObservableObject {
     private static let relayAddrForLocalTunnel = "127.0.0.1:9001"
     private var ftunStarted = false
 
-    // Реконнект-цикл стартует из трёх мест, все идут через enterRetryCycle():
+    // Реконнект-цикл стартует из двух мест, оба идут через enterRetryCycle():
     //   • Go выдал error из connected (push через EventSink.onState);
-    //   • healthcheck-зонд (captive.apple.com) провалился;
-    //   • сменилась сеть (LTE↔Wi-Fi через NetworkMonitor).
+    //   • healthcheck-зонд (captive.apple.com) провалился.
     // Сам реконнект — один MobileRestart, без промежуточного stop+start:
     // ядро атомарно подменяет текущую сессию, поэтому нет окна, в котором
     // push мог бы прислать «случайный» idle.
-    private let network = NetworkMonitor()
+    //
+    // Третьим триггером была смена сети (NetworkMonitor) — убран. Включение
+    // самого AmneziaWG тоже выглядит как смена пути, поэтому реконнект бил по
+    // рукам ровно в тот момент, когда всё только поднималось. Реальный обрыв
+    // при переходе LTE↔Wi-Fi никуда не делся, но ловится зондом за ~5с — по
+    // факту поломки, а не по событию, которое поломкой быть не обязано.
     private let protector = SocketProtector.shared
 
     // Инжектируем, чтобы тесты не зависели от содержимого UserDefaults.
@@ -135,19 +139,10 @@ final class ProxyManager: ObservableObject {
             ErrorLogger.shared.clear()
         }
         startActiveTimers()
-        network.onChange = { [weak self] in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                ErrorLogger.shared.appendAppLine(level: "WRN", message: "сетевая среда изменилась")
-                self.enterRetryCycle()
-            }
-        }
-        network.start()
     }
 
     func stop() {
         ErrorLogger.shared.shipBatch()
-        network.stop()
         autoReconnectWork?.cancel()
         autoReconnectWork = nil
         backoffTickTimer?.invalidate()
