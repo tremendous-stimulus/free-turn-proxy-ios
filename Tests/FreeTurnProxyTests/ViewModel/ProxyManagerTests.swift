@@ -26,7 +26,8 @@ final class ProxyManagerTests: XCTestCase {
     private func sampleProfile(id: UUID) -> LocalTunnelProfile {
         LocalTunnelProfile(
             id: id, remoteConfText: "conf", serverPrivateKey: "sPriv", serverPublicKey: "sPub",
-            clientPrivateKey: "cPriv", clientPublicKey: "cPub", address: "10.0.0.2/32", dns: "8.8.8.8"
+            clientPrivateKey: "cPriv", clientPublicKey: "cPub", address: "10.0.0.2/32", dns: "8.8.8.8",
+            remoteEndpoint: "1.2.3.4:51820", createdAt: Date(), sentAt: nil
         )
     }
 

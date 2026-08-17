@@ -5,6 +5,11 @@ import SwiftUI
 struct ConfigEditorView: View {
     @Environment(\.dismiss) private var dismiss
     let isEditing: Bool
+    // true — форма встроена прямо в раздел «Туннель» экрана деталей
+    // конфигурации: без своего NavigationStack/тулбара, изменения полей
+    // коммитятся в onSave сразу по мере набора (как только форма валидна),
+    // отдельной кнопки «Сохранить» нет.
+    let embedded: Bool
     let onSave: (SavedConfig) -> Void
 
     // Подсвечивать пустые обязательные поля сразу (для импорта/правки),
@@ -36,8 +41,9 @@ struct ConfigEditorView: View {
     @State private var listen: String
     @State private var debug: Bool
 
-    init(initial: SavedConfig?, isEditing: Bool, onSave: @escaping (SavedConfig) -> Void) {
+    init(initial: SavedConfig?, isEditing: Bool, embedded: Bool = false, onSave: @escaping (SavedConfig) -> Void) {
         self.isEditing = isEditing
+        self.embedded = embedded
         self.onSave = onSave
         self.prefilled = initial != nil
         self.clientId = initial?.clientId ?? ""
@@ -67,48 +73,81 @@ struct ConfigEditorView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 12) {
-                    LabeledField(title: "Название (обязательно)", icon: "character.cursor.ibeam",
-                                 placeholder: "Например, Мой сервер", text: $name,
-                                 error: nameError)
-
-                    LabeledField(title: "Адрес сервера (обязательно)", icon: "server.rack",
-                                 placeholder: "1.2.3.4:56000", text: $peer,
-                                 keyboard: .asciiCapable, error: peerError)
-
-                    obfuscationSection
-                    connectionSection
-                    performanceSection
-                    dnsSection
-                    otherSection
-                }
-                .padding()
+        if embedded {
+            fields.onChange(of: snapshot) { _ in
+                if canSave { onSave(buildConfig()) }
             }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(isEditing ? "Редактирование" : "Новая конфигурация")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // Иконки вместо текста — «Отмена»/«Сохранить» в тулбаре сжимали
-                // длинный тайтл шита в эллипсис.
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
+        } else {
+            NavigationStack {
+                fields
+                    .navigationTitle(isEditing ? "Редактирование" : "Новая конфигурация")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        // Иконки вместо текста — «Отмена»/«Сохранить» в тулбаре сжимали
+                        // длинный тайтл шита в эллипсис.
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button { dismiss() } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .foregroundStyle(.primary)
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button { save() } label: {
+                                Image(systemName: "checkmark")
+                                .foregroundStyle(.primary)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.blue)
+                            .disabled(!canSave)
+                        }
                     }
-                    .foregroundStyle(.primary)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { save() } label: {
-                        Image(systemName: "checkmark")
-                        .foregroundStyle(.primary)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.blue)
-                    .disabled(!canSave)
-                }
             }
         }
+    }
+
+    private var fields: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                LabeledField(title: "Название (обязательно)", icon: "character.cursor.ibeam",
+                             placeholder: "Например, Мой сервер", text: $name,
+                             error: nameError)
+
+                LabeledField(title: "Адрес сервера (обязательно)", icon: "server.rack",
+                             placeholder: "1.2.3.4:56000", text: $peer,
+                             keyboard: .asciiCapable, error: peerError)
+
+                obfuscationSection
+                connectionSection
+                performanceSection
+                dnsSection
+                otherSection
+            }
+            .padding()
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    // Снимок всех редактируемых полей — единая точка для live-коммита в
+    // embedded-режиме: одно .onChange вместо одного на каждое поле.
+    private struct Snapshot: Equatable {
+        var name, peer: String
+        var manualCaptcha: Bool
+        var obfProfile, obfKey, obfTimingMsText: String
+        var transport, mode: String
+        var bond: Bool
+        var threadsText, streamsPerCredText: String
+        var dnsMode, dns: String
+        var turnEndpoint, listen: String
+        var debug: Bool
+    }
+
+    private var snapshot: Snapshot {
+        Snapshot(name: name, peer: peer, manualCaptcha: manualCaptcha,
+                 obfProfile: obfProfile, obfKey: obfKey, obfTimingMsText: obfTimingMsText,
+                 transport: transport, mode: mode, bond: bond,
+                 threadsText: threadsText, streamsPerCredText: streamsPerCredText,
+                 dnsMode: dnsMode, dns: dns,
+                 turnEndpoint: turnEndpoint, listen: listen, debug: debug)
     }
 
     // MARK: – Обфускация
@@ -326,9 +365,9 @@ struct ConfigEditorView: View {
             && threadsError == nil && streamsPerCredError == nil
     }
 
-    private func save() {
+    private func buildConfig() -> SavedConfig {
         let turnHostPort = turnHostPort
-        let c = SavedConfig(
+        return SavedConfig(
             name: trimName, peer: trimPeer, obfKey: trimObfKey,
             dns: trimDns, listen: trimListen,
             transport: transport, manualCaptcha: manualCaptcha,
@@ -338,7 +377,10 @@ struct ConfigEditorView: View {
             dnsMode: dnsMode, turnHost: turnHostPort?.host ?? "", turnPort: turnHostPort?.port ?? "",
             debug: debug, clientId: clientId
         )
-        onSave(c)
+    }
+
+    private func save() {
+        onSave(buildConfig())
         dismiss()
     }
 }

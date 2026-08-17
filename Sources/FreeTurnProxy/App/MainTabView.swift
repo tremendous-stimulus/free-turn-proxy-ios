@@ -43,26 +43,20 @@ struct MainTabView: View {
                 TabView(selection: $tab) {
 
                     TunnelView()
-                        .tabItem { Label("Туннель", systemImage: "arrow.up.arrow.down") }
+                        .tabItem { Label("Конфигурации", systemImage: "arrow.up.arrow.down") }
                         .tag(UIState.tunnelTabTag)
-
-                    NavigationStack {
-                        ConfigView(isSelected: tab == 1)
-                    }
-                    .tabItem { Label("Конфиг VPN", systemImage: "network") }
-                    .tag(1)
 
                     NavigationStack {
                         LogsView()
                     }
                     .tabItem { Label("Логи", systemImage: "doc.text") }
-                    .tag(2)
+                    .tag(1)
 
                     NavigationStack {
                         HelpView()
                     }
                     .tabItem { Label("Помощь", systemImage: "questionmark.circle") }
-                    .tag(3)
+                    .tag(2)
                 }
                 .environment(\.isBannerVisible, isBannerVisible)
                 .onChange(of: tab) { newTab in UIState.currentTab = newTab }

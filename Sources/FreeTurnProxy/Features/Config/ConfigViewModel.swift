@@ -6,7 +6,6 @@ final class ConfigViewModel: ObservableObject {
     @Published var inputError: String?
     @Published var tunnelName = ""
     @Published var showNaming = false
-    @Published var selectedScheme: AllowedIPsBuilder.Scheme = .withoutWhitelist
 
     // Готовый .conf и переход на экран экспорта (внутри того же sheet).
     @Published var exportURL: URL?
@@ -52,11 +51,12 @@ final class ConfigViewModel: ObservableObject {
             .components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined()
         let fileName = (safeName.isEmpty ? "tunnel" : safeName) + ".conf"
         let endpoint = AppSettings.listen
-        let scheme = selectedScheme
 
         Task.detached {
             do {
-                let allowedIPs = try await AllowedIPsBuilder.build(scheme: scheme)
+                // Схема больше не выбирается пользователем, зафиксирована на
+                // .withoutVK — см. план vpn-lexical-rossum.md, фаза 0.
+                let allowedIPs = try await AllowedIPsBuilder.build(scheme: .withoutVK)
                 let patched = ConfigPatcher.patch(text, allowedIPs: allowedIPs, endpoint: endpoint)
                 let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
                 try patched.write(to: url, atomically: true, encoding: .utf8)

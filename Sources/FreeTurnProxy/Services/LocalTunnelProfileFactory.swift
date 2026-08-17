@@ -25,21 +25,28 @@ enum LocalTunnelProfileFactory {
             clientPrivateKey: client.privateKeyBase64,
             clientPublicKey: client.publicKeyBase64,
             address: address,
-            dns: dns
+            dns: dns,
+            remoteEndpoint: sectionField("Endpoint", section: "[Peer]", in: remoteConfText) ?? "",
+            createdAt: Date(),
+            sentAt: nil
         )
     }
 
-    // Построчный поиск "Ключ = значение" в секции [Interface] — та же схема,
-    // что и в ConfigPatcher, без полноценного парсера.
     private static func interfaceField(_ key: String, in config: String) -> String? {
-        var inInterface = false
+        sectionField(key, section: "[Interface]", in: config)
+    }
+
+    // Построчный поиск "Ключ = значение" в заданной секции — та же схема,
+    // что и в ConfigPatcher, без полноценного парсера.
+    private static func sectionField(_ key: String, section: String, in config: String) -> String? {
+        var inSection = false
         for line in config.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("[") {
-                inInterface = (trimmed == "[Interface]")
+                inSection = (trimmed == section)
                 continue
             }
-            guard inInterface else { continue }
+            guard inSection else { continue }
             let parts = trimmed.components(separatedBy: "=")
             guard parts.count >= 2 else { continue }
             let k = parts[0].trimmingCharacters(in: .whitespaces)

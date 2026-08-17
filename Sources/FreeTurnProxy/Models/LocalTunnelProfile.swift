@@ -17,4 +17,10 @@ struct LocalTunnelProfile: Codable, Equatable {
     // pass-through без NAT, поэтому исходящий IP обязан совпадать.
     var address: String
     var dns: String
+    // Endpoint из [Peer] реального конфига — только для отображения в
+    // карточке «Конфиг вашего VPN-сервера», в маршрутизации не участвует.
+    var remoteEndpoint: String
+    var createdAt: Date
+    // nil, пока пользователь ни разу не отправлял профиль в AmneziaWG.
+    var sentAt: Date?
 }

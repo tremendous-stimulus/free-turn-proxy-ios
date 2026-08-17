@@ -5,6 +5,7 @@ struct TunnelView: View {
     @ObservedObject private var proxy = ProxyManager.shared
     @ObservedObject private var store = ConfigStore.shared
     @ObservedObject private var captcha = CaptchaController.shared
+    private static let onboardingProfiles = KeychainLocalTunnelProfileStore()
     @State private var editorTarget: EditorTarget?
     @State private var pendingDelete: SavedConfig?
     @State private var showUndo = false
@@ -13,6 +14,7 @@ struct TunnelView: View {
     @State private var showLinkInput = false
     @State private var linkInputText = ""
     @State private var showQRScan = false
+    @State private var navPath = NavigationPath()
     @Environment(\.isBannerVisible) private var isBannerVisible
 
     // Литерал-плейсхолдер трактовался бы как LocalizedStringKey, и SwiftUI
@@ -20,7 +22,7 @@ struct TunnelView: View {
     private static let linkInputPlaceholder = "freeturn://…"
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             ScrollView {
                 VStack(spacing: 24) {
                     configsSection
@@ -32,8 +34,11 @@ struct TunnelView: View {
                 .padding()
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Туннель")
+            .navigationTitle("Конфигурации")
             .navigationBarTitleDisplayMode(isBannerVisible ? .inline : .large)
+            .navigationDestination(for: UUID.self) { id in
+                TunnelDetailView(configID: id, vm: vm)
+            }
             .alert("Ошибка", isPresented: .isNotNil($vm.errorText)) {
                 Button("OK") { vm.errorText = nil }
             } message: {
@@ -138,12 +143,61 @@ struct TunnelView: View {
         }
     }
 
-    // MARK: – Status
+    // MARK: – Статус и подключение
 
-    private var statusSection: some View {
+    private func activeConfigSection(_ c: SavedConfig) -> some View {
+        VStack(spacing: 14) {
+            if let step = onboardingStep(for: c) {
+                onboardingChecklist(currentStep: step)
+            }
+            statusRow(color: statusColor, text: statusMessage)
+
+            if captcha.pendingURL != nil {
+                // Во время капчи: «отключиться» ужимается в кружок-стоп, а
+                // «Показать капчу» занимает оставшееся место справа.
+                HStack(spacing: 12) {
+                    Button { vm.toggle() } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .frame(width: 50, height: 50)
+                            .background(Color.red, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button { captcha.reopen() } label: {
+                        Label("Показать капчу", systemImage: "checkmark.shield")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(.orange)
+                }
+            } else {
+                Button { vm.toggle() } label: {
+                    Label(
+                        proxy.isRunning ? "Отключиться" : "Подключиться",
+                        systemImage: proxy.isRunning ? "stop.fill" : "play.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(proxy.isRunning ? .red : .blue)
+                .disabled(!vm.canConnect && !proxy.isRunning)
+            }
+
+            if proxy.state == .connected {
+                statsBlock
+                amneziaHint
+            }
+        }
+    }
+
+    private func statusRow(color: Color, text: String) -> some View {
         HStack(spacing: 10) {
-            Circle().fill(statusColor).frame(width: 10, height: 10)
-            Text(statusMessage)
+            Circle().fill(color).frame(width: 10, height: 10)
+            Text(text)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -169,6 +223,88 @@ struct TunnelView: View {
             return "Переподключаемся через \(s > 1 ? s : 1) с" // чтобы на нуле не фликерило
         case .error:      return "Ошибка"
         case .idle:       return "Не подключено"
+        }
+    }
+
+    // Онбординг: чеклист из трёх шагов, пока новый режим не настроен целиком.
+    // Профиль читается напрямую из Keychain — лёгкий разовый доступ, заводить
+    // его в ProxyManager/TunnelViewModel ради одного чтения на экране не нужно.
+    private static let onboardingSteps = [
+        "Добавьте конфиг вашего VPN-сервера",
+        "Отправьте профиль в AmneziaWG",
+        "Нажмите «Подключиться»",
+    ]
+
+    private func onboardingStep(for c: SavedConfig) -> Int? {
+        guard c.useLocalTunnel else { return nil }
+        guard let profileID = c.wgProfileID,
+              let profile = Self.onboardingProfiles.load(profileID) else { return 1 }
+        guard profile.sentAt != nil else { return 2 }
+        guard !proxy.isRunning else { return nil }
+        return 3
+    }
+
+    private func onboardingChecklist(currentStep: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(Self.onboardingSteps.enumerated()), id: \.offset) { i, text in
+                let step = i + 1
+                HStack(spacing: 10) {
+                    Image(systemName: step < currentStep ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(step < currentStep ? .green : .secondary)
+                    Text(text)
+                        .font(.footnote)
+                        .foregroundStyle(step == currentStep ? .primary : .secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var statsBlock: some View {
+        VStack(spacing: 6) {
+            Divider()
+            HStack {
+                statCell(icon: "arrow.trianglehead.branch", label: "Стримы",
+                         stat: "\(proxy.connectedStreams)/\(proxy.totalStreams)", substat: "стримов")
+                Divider().frame(height: 36)
+                statCell(icon: "arrow.up", label: "Отправлено",
+                         stat: formatRate(proxy.txRateBytesPerSec), substat: formatBytes(proxy.txTotalBytes))
+                Divider().frame(height: 36)
+                statCell(icon: "arrow.down", label: "Получено",
+                         stat: formatRate(proxy.rxRateBytesPerSec), substat: formatBytes(proxy.rxTotalBytes))
+            }
+        }
+    }
+
+    private func statCell(icon: String, label: String, stat: String, substat: String) -> some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).foregroundStyle(.blue).font(.caption)
+                Text(stat).font(.subheadline.bold()).monospacedDigit()
+            }
+            Text(substat).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var amneziaHint: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            hintRow("Если конфига AmneziaWG/WireGuard ещё нет, его можно сгенерировать в деталях этой конфигурации.")
+            hintRow("Конфиг уже есть? Просто откройте AmneziaWG/WireGuard и включите VPN.")
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func hintRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 
@@ -242,7 +378,7 @@ struct TunnelView: View {
             Spacer()
             Menu {
                 Button {
-                    editorTarget = EditorTarget(initial: c, editingID: c.id)
+                    navPath.append(c.id)
                 } label: { Label("Редактировать", systemImage: "pencil") }
                     .disabled(proxy.isRunning && isSelected)
                 Menu {
@@ -272,99 +408,6 @@ struct TunnelView: View {
         .contentShape(Rectangle())
         .onTapGesture { if !proxy.isRunning { store.select(c.id) } }
         .opacity(proxy.isRunning && !isSelected ? 0.4 : 1)
-    }
-
-    // MARK: – Active config actions
-
-    private func activeConfigSection(_ c: SavedConfig) -> some View {
-        VStack(spacing: 14) {
-            statusSection
-
-            if captcha.pendingURL != nil {
-                // Во время капчи: «отключиться» ужимается в кружок-стоп, а
-                // «Показать капчу» занимает оставшееся место справа.
-                HStack(spacing: 12) {
-                    Button { vm.toggle() } label: {
-                        Image(systemName: "stop.fill")
-                            .font(.title3)
-                            .foregroundStyle(.white)
-                            .frame(width: 50, height: 50)
-                            .background(Color.red, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button { captcha.reopen() } label: {
-                        Label("Показать капчу", systemImage: "checkmark.shield")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .tint(.orange)
-                }
-            } else {
-                Button { vm.toggle() } label: {
-                    Label(
-                        proxy.isRunning ? "Отключиться" : "Подключиться",
-                        systemImage: proxy.isRunning ? "stop.fill" : "play.fill"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .tint(proxy.isRunning ? .red : .blue)
-                .disabled(!vm.canConnect && !proxy.isRunning)
-            }
-
-            if proxy.state == .connected {
-                statsBlock
-                amneziaHint
-            }
-        }
-    }
-
-    private var statsBlock: some View {
-        VStack(spacing: 6) {
-            Divider()
-            HStack {
-                statCell(icon: "arrow.trianglehead.branch", label: "Стримы",
-                         stat: "\(proxy.connectedStreams)/\(proxy.totalStreams)", substat: "стримов")
-                Divider().frame(height: 36)
-                statCell(icon: "arrow.up", label: "Отправлено",
-                         stat: formatRate(proxy.txRateBytesPerSec), substat: formatBytes(proxy.txTotalBytes))
-                Divider().frame(height: 36)
-                statCell(icon: "arrow.down", label: "Получено",
-                         stat: formatRate(proxy.rxRateBytesPerSec), substat: formatBytes(proxy.rxTotalBytes))
-            }
-        }
-    }
-
-    private func statCell(icon: String, label: String, stat: String, substat: String) -> some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 4) {
-                Image(systemName: icon).foregroundStyle(.blue).font(.caption)
-                Text(stat).font(.subheadline.bold()).monospacedDigit()
-            }
-            Text(substat).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private var amneziaHint: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
-            hintRow("Если конфига AmneziaWG/WireGuard ещё нет, его можно сгенерировать во вкладке VPN.")
-            hintRow("Конфиг уже есть? Просто откройте AmneziaWG/WireGuard и включите VPN.")
-        }
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func hintRow(_ text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text(text).fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
     }
 
     // Разовая подсказка про шейк-отмену удаления, авто-скрытие через ~4с.

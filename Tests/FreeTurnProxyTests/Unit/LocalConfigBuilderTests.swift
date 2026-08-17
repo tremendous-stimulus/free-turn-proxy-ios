@@ -11,7 +11,10 @@ final class LocalConfigBuilderTests: XCTestCase {
             clientPrivateKey: "clientPriv",
             clientPublicKey: "clientPub",
             address: "10.0.0.2/32",
-            dns: dns
+            dns: dns,
+            remoteEndpoint: "1.2.3.4:51820",
+            createdAt: Date(),
+            sentAt: nil
         )
     }
 

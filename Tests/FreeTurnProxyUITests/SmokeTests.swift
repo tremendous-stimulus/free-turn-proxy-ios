@@ -21,10 +21,9 @@ final class SmokeTests: XCTestCase {
 
     // MARK: – Навигация
 
-    func test_allFourTabsExist() {
+    func test_allTabsExist() {
         let bar = app.tabBars.firstMatch
-        XCTAssertTrue(bar.buttons["Туннель"].exists)
-        XCTAssertTrue(bar.buttons["Конфиг VPN"].exists)
+        XCTAssertTrue(bar.buttons["Конфигурации"].exists)
         XCTAssertTrue(bar.buttons["Логи"].exists)
         XCTAssertTrue(bar.buttons["Помощь"].exists)
     }
