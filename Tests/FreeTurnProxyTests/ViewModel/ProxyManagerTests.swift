@@ -114,6 +114,7 @@ final class ProxyManagerTests: XCTestCase {
         XCTAssertEqual(mock.startCallCount, 1)
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         XCTAssertEqual(pm.state, .connected)
 
         pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
@@ -148,6 +149,7 @@ final class ProxyManagerTests: XCTestCase {
         try pm.start()
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
         XCTAssertEqual(pm.state, .retryBackoff)
 
@@ -167,6 +169,7 @@ final class ProxyManagerTests: XCTestCase {
         try pm.start()
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         let restartsBefore = mock.restartCallCount
 
         pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
@@ -190,22 +193,25 @@ final class ProxyManagerTests: XCTestCase {
         // Полный цикл: connected → error → бекофф → опять connected (пуш от
         // ядра после того, как реконнект в фоне отработал).
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
         XCTAssertEqual(pm.state, .retryBackoff)
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
 
         XCTAssertEqual(pm.state, .connected)
         XCTAssertTrue(pm.isRunning)
         pm.stop()
     }
 
-    func test_autoReconnect_stopsAfterFiveAttempts() throws {
+    func test_autoReconnect_stopsAfterFiveAttempts() async throws {
         let (pm, mock) = manager()
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
 
         for _ in 1...5 {
             pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
@@ -220,18 +226,20 @@ final class ProxyManagerTests: XCTestCase {
         XCTAssertTrue(mock.stopCalled)
     }
 
-    func test_autoReconnect_successResetsAttemptBudget() throws {
+    func test_autoReconnect_successResetsAttemptBudget() async throws {
         let (pm, mock) = manager()
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         for _ in 1...3 {
             pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
         }
         XCTAssertEqual(pm.state, .retryBackoff)
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
 
         for _ in 1...5 {
             pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
@@ -243,7 +251,7 @@ final class ProxyManagerTests: XCTestCase {
 
     // MARK: – WG-in-WG (план, фаза 2)
 
-    func test_localTunnel_startsAfterFirstConnected() throws {
+    func test_localTunnel_startsAfterFirstConnected() async throws {
         let (pm, _, ftun, store) = managerWithFtun()
         let profileID = UUID()
         store.save(sampleProfile(id: profileID))
@@ -255,21 +263,23 @@ final class ProxyManagerTests: XCTestCase {
 
         XCTAssertFalse(ftun.startCalled, "ftun не должен стартовать до первого connected")
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         XCTAssertTrue(ftun.startCalled)
         XCTAssertEqual(ftun.startCallCount, 1)
         pm.stop()
     }
 
-    func test_localTunnel_notStarted_whenUseLocalTunnelFalse() throws {
+    func test_localTunnel_notStarted_whenUseLocalTunnelFalse() async throws {
         let (pm, _, ftun, _) = managerWithFtun()
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         XCTAssertFalse(ftun.startCalled)
         pm.stop()
     }
 
-    func test_localTunnel_startsOnceAcrossReconnects() throws {
+    func test_localTunnel_startsOnceAcrossReconnects() async throws {
         let (pm, _, ftun, store) = managerWithFtun()
         let profileID = UUID()
         store.save(sampleProfile(id: profileID))
@@ -280,14 +290,16 @@ final class ProxyManagerTests: XCTestCase {
         try pm.start()
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
 
         XCTAssertEqual(ftun.startCallCount, 1, "ftun не перезапускается реконнектом внешней половины")
         pm.stop()
     }
 
-    func test_localTunnel_stoppedOnStop() throws {
+    func test_localTunnel_stoppedOnStop() async throws {
         let (pm, _, ftun, store) = managerWithFtun()
         let profileID = UUID()
         store.save(sampleProfile(id: profileID))
@@ -297,12 +309,13 @@ final class ProxyManagerTests: XCTestCase {
         pm.loadConfig(cfg, fileName: "test.freeturn")
         try pm.start()
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
 
         pm.stop()
         XCTAssertEqual(ftun.stopCallCount, 1)
     }
 
-    func test_localTunnel_missingProfile_doesNotCrashOrStartFtun() throws {
+    func test_localTunnel_missingProfile_doesNotCrashOrStartFtun() async throws {
         let (pm, _, ftun, _) = managerWithFtun()
         var cfg = sampleConfig()
         cfg.config.useLocalTunnel = true
@@ -310,11 +323,12 @@ final class ProxyManagerTests: XCTestCase {
         pm.loadConfig(cfg, fileName: "test.freeturn")
         try pm.start()
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
         XCTAssertFalse(ftun.startCalled)
         pm.stop()
     }
 
-    func test_localTunnel_startSendsExpectedFields() throws {
+    func test_localTunnel_startSendsExpectedFields() async throws {
         let (pm, _, ftun, store) = managerWithFtun()
         let profileID = UUID()
         store.save(sampleProfile(id: profileID))
@@ -324,6 +338,7 @@ final class ProxyManagerTests: XCTestCase {
         pm.loadConfig(cfg, fileName: "test.freeturn")
         try pm.start()
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        await pm.localTunnelStartTask?.value
 
         let data = Data((ftun.lastConfigJSON ?? "").utf8)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])

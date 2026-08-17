@@ -30,6 +30,13 @@ type StartConfig struct {
 	ListenPort int `json:"listenPort"`
 	// MTU — общий для обоих девайсов; см. план, раздел "MTU".
 	MTU int `json:"mtu"`
+	// BypassCIDRs — назначения, которые роутер уводит мимо туннеля (план,
+	// фаза 5.2): подсети VK и приватные диапазоны. Пустой список = поведение
+	// фазы 1, весь трафик в туннель.
+	BypassCIDRs []string `json:"bypassCIDRs"`
+	// BypassExcludeCIDRs перебивает BypassCIDRs — сюда идёт сеть самого
+	// VPN-сервера, иначе она попала бы под «приватное мимо туннеля».
+	BypassExcludeCIDRs []string `json:"bypassExcludeCIDRs"`
 }
 
 func (c StartConfig) validate() error {
@@ -107,8 +114,9 @@ func parseIpcStats(raw string) (up bool, handshakeAgeSec int64, txBytes, rxBytes
 // session — обе половины дороги плюс труба между ними (pipe.go). Владеет
 // временем жизни обоих device.Device; закрывается только целиком.
 type session struct {
-	local  half // responder: AmneziaWG (127.0.0.1:<ListenPort>) ↔ pipe
-	remote half // initiator: pipe ↔ апстрим-релей (RelayAddr)
+	local  half // responder: AmneziaWG (127.0.0.1:<ListenPort>) ↔ router
+	remote half // initiator: router ↔ апстрим-релей (RelayAddr)
+	router *router
 }
 
 func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
@@ -120,7 +128,24 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 		return nil, fmt.Errorf("не удалось разобрать remoteConf: %w", err)
 	}
 
-	localTun, remoteTun := NewPipe(cfg.MTU)
+	localTun := newEndpoint("ftun-local", cfg.MTU)
+	remoteTun := newEndpoint("ftun-remote", cfg.MTU)
+
+	// Стек обхода поднимаем только когда есть что обходить: без него роутер
+	// вырождается в pass-through фазы 1, и лишний userspace-стек в памяти
+	// висеть не должен.
+	bypass := NewBypassSet(cfg.BypassCIDRs, cfg.BypassExcludeCIDRs)
+	var stk *bypassStack
+	if bypass.Len() > 0 {
+		var err error
+		stk, err = newBypassStack(cfg.MTU, func(format string, args ...any) {
+			logger.Verbosef(format, args...)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("не удалось поднять стек обхода: %w", err)
+		}
+	}
+	rt := newRouter(localTun, remoteTun, bypass, stk)
 
 	localIface := InterfaceConf{
 		PrivateKey: cfg.LocalPrivateKey,
@@ -132,6 +157,7 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	}}
 	localUAPI, err := localIface.BuildUAPI(localPeers)
 	if err != nil {
+		rt.close()
 		return nil, fmt.Errorf("не удалось собрать UAPI локального девайса: %w", err)
 	}
 
@@ -139,6 +165,7 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	if err := localDev.IpcSet(localUAPI); err != nil {
 		localDev.Close()
 		remoteTun.Close()
+		rt.close()
 		return nil, fmt.Errorf("IpcSet локального девайса: %w", err)
 	}
 
@@ -153,6 +180,7 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	if err != nil {
 		localDev.Close()
 		remoteTun.Close()
+		rt.close()
 		return nil, fmt.Errorf("не удалось собрать UAPI внешнего девайса: %w", err)
 	}
 
@@ -160,29 +188,36 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	if err := remoteDev.IpcSet(remoteUAPI); err != nil {
 		localDev.Close()
 		remoteDev.Close()
+		rt.close()
 		return nil, fmt.Errorf("IpcSet внешнего девайса: %w", err)
 	}
 
 	if err := localDev.Up(); err != nil {
 		localDev.Close()
 		remoteDev.Close()
+		rt.close()
 		return nil, fmt.Errorf("Up локального девайса: %w", err)
 	}
 	if err := remoteDev.Up(); err != nil {
 		localDev.Close()
 		remoteDev.Close()
+		rt.close()
 		return nil, fmt.Errorf("Up внешнего девайса: %w", err)
 	}
+
+	rt.start()
 
 	return &session{
 		local:  half{device: localDev},
 		remote: half{device: remoteDev},
+		router: rt,
 	}, nil
 }
 
 func (s *session) close() {
 	// localTun/remoteTun закрываются самим device.Device.Close() — он
-	// закрывает переданный ему tun.Device.
+	// закрывает переданный ему tun.Device; роутер выходит по их closeCh.
 	s.local.device.Close()
 	s.remote.device.Close()
+	s.router.close()
 }

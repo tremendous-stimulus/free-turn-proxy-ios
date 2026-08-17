@@ -106,7 +106,8 @@ enum AllowedIPsBuilder {
     }
 
     // Тянем префиксы AS47764 из RIPE stat; при ошибке — fallback-константы.
-    private static func fetchVKCIDRs() async -> [String] {
+    // internal, а не private: тем же списком пользуется BypassRoutes (фаза 5.2).
+    static func fetchVKCIDRs() async -> [String] {
         struct RIPEPrefix: Decodable { let prefix: String }
         struct RIPEData: Decodable { let prefixes: [RIPEPrefix] }
         struct RIPEResponse: Decodable { let data: RIPEData }

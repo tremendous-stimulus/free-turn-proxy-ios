@@ -60,8 +60,12 @@ final class LocalTunnelSetupViewModel: ObservableObject {
         let safeName = fileName.components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined()
         Task.detached {
             do {
-                let allowedIPs = try await AllowedIPsBuilder.build(scheme: .withoutVK)
-                let text = LocalConfigBuilder.build(profile: profile, allowedIPs: allowedIPs)
+                // AllowedIPs больше не считается вычитанием подсетей: весь
+                // трафик забирается в туннель, а что уходит мимо — решает
+                // роутер ftun в рантайме (план, фаза 5.2). Именно это и делает
+                // профиль в AmneziaWG «ставится один раз и навсегда»: при смене
+                // подсетей VK файл больше не надо перегенерировать.
+                let text = LocalConfigBuilder.build(profile: profile, allowedIPs: LocalConfigBuilder.allowedIPsAll)
                 let url = FileManager.default.temporaryDirectory
                     .appendingPathComponent(safeName.isEmpty ? "tunnel" : safeName)
                     .appendingPathExtension("conf")

@@ -8,6 +8,10 @@ enum LocalConfigBuilder {
     static let responderEndpoint = "127.0.0.1:9000"
     static let mtu = 1280
 
+    // Забираем в туннель всё; исключения делает роутер ftun по адресу
+    // назначения (план, фаза 5.2), а не список префиксов в файле.
+    static let allowedIPsAll = "0.0.0.0/0"
+
     static func build(profile: LocalTunnelProfile, allowedIPs: String) -> String {
         var lines = [
             "[Interface]",

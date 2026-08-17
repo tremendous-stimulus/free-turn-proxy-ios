@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,11 +44,28 @@ func mustGetFreePort(t *testing.T) int {
 	return l.LocalAddr().(*net.UDPAddr).Port
 }
 
+// Горутины device.Device доживают до конца теста и продолжают логировать —
+// t.Logf после завершения теста даёт гонку с самим testing. Поэтому логгер
+// глохнет в Cleanup: он выполняется до того, как тест помечен завершённым.
 func testLogger(t *testing.T, tag string) *device.Logger {
-	return &device.Logger{
-		Verbosef: func(format string, args ...any) { t.Logf("[%s] "+format, append([]any{tag}, args...)...) },
-		Errorf:   func(format string, args ...any) { t.Logf("[%s ERR] "+format, append([]any{tag}, args...)...) },
+	var mu sync.Mutex
+	finished := false
+	t.Cleanup(func() {
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+	logf := func(prefix string) func(string, ...any) {
+		return func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			if finished {
+				return
+			}
+			t.Logf("["+tag+prefix+"] "+format, args...)
+		}
 	}
+	return &device.Logger{Verbosef: logf(""), Errorf: logf(" ERR")}
 }
 
 // minimalIPv4Packet — на отправку WG (device/send.go RoutineReadFromTUN)

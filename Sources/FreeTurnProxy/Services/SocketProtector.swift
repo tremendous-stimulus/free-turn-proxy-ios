@@ -15,7 +15,10 @@ import Mobile
 // Работоспособность привязки перепроверена на устройстве 2026-08-18 (Фаза 0-бис):
 // и на Wi-Fi, и на LTE сокет с IP_BOUND_IF выходит мимо туннеля. Вывод
 // оригинальной Фазы 0 («не работает») неверен.
-final class SocketProtector: NSObject, MobileProtectorProtocol {
+// Один класс на оба биндинга: у mobile.Protector и ftun.Protector совпадает
+// селектор, поэтому и сокеты ядра, и сокеты обходного netstack'а (фаза 5.2)
+// защищает одна и та же реализация.
+final class SocketProtector: NSObject, MobileProtectorProtocol, FtunProtectorProtocol {
     static let shared = SocketProtector()
 
     // IP_BOUND_IF / IPV6_BOUND_IF не экспортированы в Swift — сырые значения

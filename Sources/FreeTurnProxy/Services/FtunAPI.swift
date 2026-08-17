@@ -18,6 +18,7 @@ protocol FtunAPI {
     func stop()
     func stats() -> FtunSnapshot?
     func setEventSink(_ s: FtunEventSinkProtocol?)
+    func setProtect(_ p: FtunProtectorProtocol?)
     func version() -> String
 }
 
@@ -30,6 +31,10 @@ struct FtunStartRequest: Codable {
     var relayAddr: String
     var listenPort: Int
     var mtu: Int
+    // Что уходит мимо туннеля и что из этого всё-таки остаётся в нём
+    // (фаза 5.2). Пустой bypassCIDRs = поведение фазы 1, чистый pass-through.
+    var bypassCIDRs: [String]
+    var bypassExcludeCIDRs: [String]
 
     func encodedJSON() throws -> String {
         let data = try JSONEncoder().encode(self)
@@ -54,6 +59,10 @@ struct LiveFtunAPI: FtunAPI {
 
     func setEventSink(_ s: FtunEventSinkProtocol?) {
         FtunSetEventSink(s)
+    }
+
+    func setProtect(_ p: FtunProtectorProtocol?) {
+        FtunSetProtect(p)
     }
 
     func version() -> String {

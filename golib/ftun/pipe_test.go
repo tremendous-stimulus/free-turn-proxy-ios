@@ -107,10 +107,14 @@ func TestPipe_CloseUnblocksRead(t *testing.T) {
 	}
 }
 
-func TestPipe_WriteAfterPeerCloseFails(t *testing.T) {
+// С роутером между половинами (фаза 5.2) закрытие противоположного конца в
+// момент Write не наблюдаемо: пакет уходит в свою исходящую очередь, а дальше
+// его просто некому забрать. Ошибку даёт закрытие своего же конца — именно на
+// него опирается device.Device, останавливая свои воркеры.
+func TestPipe_WriteAfterOwnCloseFails(t *testing.T) {
 	a, b := NewPipe(1280)
-	defer a.Close()
-	b.Close()
+	defer b.Close()
+	a.Close()
 
 	if _, err := a.Write([][]byte{[]byte("x")}, 0); err == nil {
 		t.Error("ожидалась ошибка записи в закрытый конец")

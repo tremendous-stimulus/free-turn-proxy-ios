@@ -33,5 +33,8 @@ final class MockFtunAPI: FtunAPI {
 
     func setEventSink(_ s: FtunEventSinkProtocol?) { eventSinkSet = s }
 
+    var protectorSet: FtunProtectorProtocol?
+    func setProtect(_ p: FtunProtectorProtocol?) { protectorSet = p }
+
     func version() -> String { "mock" }
 }

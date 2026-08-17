@@ -60,6 +60,12 @@ final class ProxyManager: ObservableObject {
     private let network = NetworkMonitor()
     private let protector = SocketProtector.shared
 
+    // Список обхода тянется из сети (подсети VK), поэтому инжектируем: тесты
+    // не должны ходить наружу. Старт локальной половины из-за этого
+    // асинхронный — задача выставляется наружу, чтобы её можно было дождаться.
+    private let bypassRoutes: () async -> [String]
+    private(set) var localTunnelStartTask: Task<Void, Never>?
+
     // Срабатывает только если в течение сессии хотя бы раз дошли до connected —
     // connecting→error не ретраит (это первичный провал коннекта, не реконнект).
     private var everConnected = false
@@ -86,14 +92,17 @@ final class ProxyManager: ObservableObject {
         self.mobile = LiveMobileAPI()
         self.ftun = LiveFtunAPI()
         self.localTunnelProfiles = KeychainLocalTunnelProfileStore()
+        self.bypassRoutes = BypassRoutes.build
     }
 
     // Инжектируемый init — для тестов с MockMobileAPI/MockFtunAPI.
     init(mobile: MobileAPI, ftun: FtunAPI = LiveFtunAPI(),
-         localTunnelProfiles: LocalTunnelProfileStoring = KeychainLocalTunnelProfileStore()) {
+         localTunnelProfiles: LocalTunnelProfileStoring = KeychainLocalTunnelProfileStore(),
+         bypassRoutes: @escaping () async -> [String] = { [] }) {
         self.mobile = mobile
         self.ftun = ftun
         self.localTunnelProfiles = localTunnelProfiles
+        self.bypassRoutes = bypassRoutes
     }
 
     func loadConfig(_ config: FreeTurnConfig, fileName: String) {
@@ -196,21 +205,39 @@ final class ProxyManager: ObservableObject {
         guard !ftunStarted, let config, config.config.useLocalTunnel,
               let profileID = config.config.wgProfileID,
               let profile = localTunnelProfiles.load(profileID) else { return }
-        do {
-            let req = FtunStartRequest(
-                remoteConf: profile.remoteConfText,
-                localPrivateKey: profile.serverPrivateKey,
-                localPeerPublicKey: profile.clientPublicKey,
-                relayAddr: Self.relayAddrForLocalTunnel,
-                listenPort: Self.localResponderPort,
-                mtu: LocalConfigBuilder.mtu
-            )
-            try ftun.start(configJSON: req.encodedJSON())
-            ftunStarted = true
-        } catch {
-            ErrorLogger.shared.appendAppLine(
-                level: "ERR", message: "локальный туннель не поднялся: \(error.localizedDescription)"
-            )
+        // Взводим флаг до фетча списка обхода: он ходит в сеть, а этот метод
+        // зовётся на каждый connected внешней половины — иначе реконнект во
+        // время фетча поднял бы вторую сессию ftun.
+        ftunStarted = true
+        localTunnelStartTask = Task { [weak self] in
+            guard let self else { return }
+            let bypass = await self.bypassRoutes()
+            let excludes = BypassRoutes.excludes(address: profile.address)
+            do {
+                let req = FtunStartRequest(
+                    remoteConf: profile.remoteConfText,
+                    localPrivateKey: profile.serverPrivateKey,
+                    localPeerPublicKey: profile.clientPublicKey,
+                    relayAddr: Self.relayAddrForLocalTunnel,
+                    listenPort: Self.localResponderPort,
+                    mtu: LocalConfigBuilder.mtu,
+                    bypassCIDRs: bypass,
+                    bypassExcludeCIDRs: excludes
+                )
+                // Обходные сокеты netstack'а тоже обязаны выходить мимо VPN —
+                // без protect обход замкнулся бы сам на себя (фаза 5.2).
+                self.protector.activate()
+                self.ftun.setProtect(self.protector)
+                try self.ftun.start(configJSON: req.encodedJSON())
+                ErrorLogger.shared.appendAppLine(
+                    level: "INF", message: "локальный туннель поднят, мимо туннеля: \(bypass.count) подсетей"
+                )
+            } catch {
+                self.ftunStarted = false
+                ErrorLogger.shared.appendAppLine(
+                    level: "ERR", message: "локальный туннель не поднялся: \(error.localizedDescription)"
+                )
+            }
         }
     }
 

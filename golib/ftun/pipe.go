@@ -7,50 +7,47 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/tun"
 )
 
-// pipeEnd — реализация tun.Device поверх канала в памяти. Пара pipeEnd,
-// созданная NewPipe, и есть "роутер" между двумя WG-девайсами (см. device.go):
-// то, что один девайс расшифровал и записал в свой tun, читает как входящий
-// IP-пакет другой девайс, и наоборот. В фазе 1 это чистый pass-through —
-// без NAT и без фильтрации, см. план (раздел "Роутер — чистый L3 pass-through").
-type pipeEnd struct {
+// endpoint — tun.Device поверх пары каналов в памяти. В отличие от прямой
+// склейки двух девайсов (фаза 1), входящая и исходящая очереди разведены:
+// девайс читает из inbound и пишет в outbound, а кто и куда перекладывает
+// пакеты — решает router (см. router.go, план фаза 5.2).
+type endpoint struct {
 	name string
 	mtu  int
 
-	peer *pipeEnd
-	in   chan []byte
+	inbound  chan []byte
+	outbound chan []byte
 
 	events    chan tun.Event
 	closeCh   chan struct{}
 	closeOnce sync.Once
 }
 
-// NewPipe создаёт связанную пару tun.Device: всё записанное в одну половину
-// читается из другой.
-func NewPipe(mtu int) (a tun.Device, b tun.Device) {
-	pa := &pipeEnd{
-		name:    "ftun-local",
-		mtu:     mtu,
-		in:      make(chan []byte, 256),
-		events:  make(chan tun.Event, 8),
-		closeCh: make(chan struct{}),
+func newEndpoint(name string, mtu int) *endpoint {
+	return &endpoint{
+		name:     name,
+		mtu:      mtu,
+		inbound:  make(chan []byte, 256),
+		outbound: make(chan []byte, 256),
+		events:   make(chan tun.Event, 8),
+		closeCh:  make(chan struct{}),
 	}
-	pb := &pipeEnd{
-		name:    "ftun-remote",
-		mtu:     mtu,
-		in:      make(chan []byte, 256),
-		events:  make(chan tun.Event, 8),
-		closeCh: make(chan struct{}),
-	}
-	pa.peer = pb
-	pb.peer = pa
-	return pa, pb
 }
 
-func (e *pipeEnd) File() *os.File { return nil }
+// NewPipe создаёт пару tun.Device, склеенную чистым pass-through: всё
+// записанное в одну половину читается из другой. Это поведение фазы 1;
+// маршрутизация появляется, когда router получает непустой BypassSet.
+func NewPipe(mtu int) (a tun.Device, b tun.Device) {
+	local, remote := newEndpoint("ftun-local", mtu), newEndpoint("ftun-remote", mtu)
+	newRouter(local, remote, nil, nil).start()
+	return local, remote
+}
 
-func (e *pipeEnd) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+func (e *endpoint) File() *os.File { return nil }
+
+func (e *endpoint) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	select {
-	case pkt, ok := <-e.in:
+	case pkt, ok := <-e.inbound:
 		if !ok {
 			return 0, os.ErrClosed
 		}
@@ -58,7 +55,7 @@ func (e *pipeEnd) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 		n := 1
 		for n < len(bufs) {
 			select {
-			case pkt2, ok := <-e.in:
+			case pkt2, ok := <-e.inbound:
 				if !ok {
 					return n, nil
 				}
@@ -74,7 +71,7 @@ func (e *pipeEnd) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	}
 }
 
-func (e *pipeEnd) Write(bufs [][]byte, offset int) (int, error) {
+func (e *endpoint) Write(bufs [][]byte, offset int) (int, error) {
 	written := 0
 	for _, buf := range bufs {
 		if offset > len(buf) {
@@ -82,18 +79,16 @@ func (e *pipeEnd) Write(bufs [][]byte, offset int) (int, error) {
 		}
 		pkt := make([]byte, len(buf)-offset)
 		copy(pkt, buf[offset:])
+		// Отдельная проверка перед select: при обоих готовых case'ах select
+		// выбирает случайно, и запись в закрытый конец иногда «удавалась».
 		select {
-		case <-e.peer.closeCh:
-			return written, os.ErrClosed
 		case <-e.closeCh:
 			return written, os.ErrClosed
 		default:
 		}
 		select {
-		case e.peer.in <- pkt:
+		case e.outbound <- pkt:
 			written++
-		case <-e.peer.closeCh:
-			return written, os.ErrClosed
 		case <-e.closeCh:
 			return written, os.ErrClosed
 		}
@@ -101,15 +96,26 @@ func (e *pipeEnd) Write(bufs [][]byte, offset int) (int, error) {
 	return written, nil
 }
 
-func (e *pipeEnd) MTU() (int, error) { return e.mtu, nil }
+// deliver кладёт пакет в очередь на чтение девайсом. Вызывается только
+// роутером.
+func (e *endpoint) deliver(pkt []byte) bool {
+	select {
+	case e.inbound <- pkt:
+		return true
+	case <-e.closeCh:
+		return false
+	}
+}
 
-func (e *pipeEnd) Name() (string, error) { return e.name, nil }
+func (e *endpoint) MTU() (int, error) { return e.mtu, nil }
 
-func (e *pipeEnd) Events() <-chan tun.Event { return e.events }
+func (e *endpoint) Name() (string, error) { return e.name, nil }
 
-func (e *pipeEnd) BatchSize() int { return 1 }
+func (e *endpoint) Events() <-chan tun.Event { return e.events }
 
-func (e *pipeEnd) Close() error {
+func (e *endpoint) BatchSize() int { return 1 }
+
+func (e *endpoint) Close() error {
 	e.closeOnce.Do(func() {
 		close(e.closeCh)
 		close(e.events)
