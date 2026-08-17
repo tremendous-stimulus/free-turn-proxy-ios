@@ -49,6 +49,25 @@ final class ProxyManagerTests: XCTestCase {
         pm.stop()
     }
 
+    // Апстрим читает protect в момент dial, поэтому сокеты, открытые до
+    // установки, останутся в туннеле — порядок вызовов тут и есть суть фикса
+    // петли (план, фаза 5.1).
+    func test_start_setsProtectBeforeStart() throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        XCTAssertTrue(mock.protectSetBeforeStart)
+        pm.stop()
+    }
+
+    func test_stop_clearsProtect() throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        pm.stop()
+        XCTAssertNil(mock.protectorSet)
+    }
+
     func test_start_propagatesMobileError() {
         let (pm, mock) = manager()
         mock.startError = NSError(domain: "test", code: 99)

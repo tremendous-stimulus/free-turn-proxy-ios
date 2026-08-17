@@ -58,6 +58,7 @@ final class ProxyManager: ObservableObject {
     // ядро атомарно подменяет текущую сессию, поэтому нет окна, в котором
     // push мог бы прислать «случайный» idle.
     private let network = NetworkMonitor()
+    private let protector = SocketProtector.shared
 
     // Срабатывает только если в течение сессии хотя бы раз дошли до connected —
     // connecting→error не ретраит (это первичный провал коннекта, не реконнект).
@@ -158,6 +159,8 @@ final class ProxyManager: ObservableObject {
         localTunnelUp = false
         localTunnelHandshakeAgeSec = 0
         mobile.stop()
+        mobile.setProtect(nil)
+        protector.deactivate()
         audio.stop()
         isRunning = false
         state = .idle
@@ -174,6 +177,10 @@ final class ProxyManager: ObservableObject {
     // фоновой очереди пока незачем. Понадобится, когда появится поддержка
     // subUrl.
     private func startMobile(_ cfg: FreeTurnConfig) throws {
+        // Ставим protect до start: апстрим читает его в момент dial, поэтому на
+        // уже открытые сокеты он не распространяется (план, фаза 5.1).
+        protector.activate()
+        mobile.setProtect(protector)
         try mobile.start(configJSON: CoreConfigBuilder.build(config: cfg.config, links: cfg.links).encodedJSON())
     }
 
