@@ -3,6 +3,13 @@ import Foundation
 // Что роутер ftun уводит мимо туннеля (план vpn-lexical-rossum.md, фаза 5.2).
 // Список считается здесь, а применяется в Go: Swift знает и подсети VK, и
 // адрес самого туннеля, а роутеру нужны только готовые CIDR.
+//
+// Критично: current() синхронный и в сеть не ходит. Фетч подсетей у RIPE идёт
+// через URLSession, то есть мимо protect (тот покрывает только сокеты
+// Go-ядра), и при поднятом AmneziaWG тонет в ещё не работающем туннеле —
+// локальная половина вставала на ~58 секунд позже внешней, пока запрос не
+// отваливался по таймауту. Поэтому сеть тут только в refresh(), который
+// готовит список к СЛЕДУЮЩЕМУ запуску и зовётся уже при живом туннеле.
 enum BypassRoutes {
     // Приватные и служебные диапазоны: без них при поднятом туннеле пропадает
     // локальная сеть, а link-local и CGNAT гонять через VPS бессмысленно.
@@ -14,8 +21,17 @@ enum BypassRoutes {
         "100.64.0.0/10",
     ]
 
-    static func build() async -> [String] {
-        await privateCIDRs + AllowedIPsBuilder.fetchVKCIDRs()
+    static func current(defaults: UserDefaults = .standard) -> [String] {
+        let vk = defaults.stringArray(forKey: DefaultsKeys.bypassVKCIDRs) ?? AllowedIPsBuilder.vkFallbackCIDRs
+        return privateCIDRs + vk
+    }
+
+    // Пустой ответ не кэшируем: он означает недоступность RIPE, и затирать им
+    // рабочий список — значит терять маршрутизацию VK до следующего успеха.
+    static func refresh(defaults: UserDefaults = .standard) async {
+        let fetched = await AllowedIPsBuilder.fetchVKCIDRs()
+        guard !fetched.isEmpty else { return }
+        defaults.set(fetched, forKey: DefaultsKeys.bypassVKCIDRs)
     }
 
     // Сеть самого VPN-сервера обязана остаться в туннеле: у типового конфига

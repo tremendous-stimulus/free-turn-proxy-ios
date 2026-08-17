@@ -40,4 +40,22 @@ final class BypassRoutesTests: XCTestCase {
         XCTAssertTrue(BypassRoutes.privateCIDRs.contains("10.0.0.0/8"))
         XCTAssertEqual(excluded, ["10.8.0.0/24"])
     }
+
+    // current() обязан отдавать список без единого сетевого запроса: фетч на
+    // пути старта локальной половины давал дедлок (тонул в ещё не поднятом
+    // туннеле) и задерживал её на ~58 секунд.
+    func test_current_withoutCache_usesFallbackAndPrivateRanges() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "BypassRoutesTests.empty"))
+        defaults.removePersistentDomain(forName: "BypassRoutesTests.empty")
+        let routes = BypassRoutes.current(defaults: defaults)
+        XCTAssertEqual(routes, BypassRoutes.privateCIDRs + AllowedIPsBuilder.vkFallbackCIDRs)
+    }
+
+    func test_current_prefersCachedVKRanges() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "BypassRoutesTests.cached"))
+        defaults.removePersistentDomain(forName: "BypassRoutesTests.cached")
+        defaults.set(["87.240.128.0/18"], forKey: DefaultsKeys.bypassVKCIDRs)
+        XCTAssertEqual(BypassRoutes.current(defaults: defaults),
+                       BypassRoutes.privateCIDRs + ["87.240.128.0/18"])
+    }
 }

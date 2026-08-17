@@ -60,11 +60,10 @@ final class ProxyManager: ObservableObject {
     private let network = NetworkMonitor()
     private let protector = SocketProtector.shared
 
-    // Список обхода тянется из сети (подсети VK), поэтому инжектируем: тесты
-    // не должны ходить наружу. Старт локальной половины из-за этого
-    // асинхронный — задача выставляется наружу, чтобы её можно было дождаться.
-    private let bypassRoutes: () async -> [String]
-    private(set) var localTunnelStartTask: Task<Void, Never>?
+    // Инжектируем, чтобы тесты не зависели от содержимого UserDefaults.
+    // Синхронный намеренно: сеть на пути старта локальной половины даёт
+    // дедлок (см. startLocalTunnelIfNeeded).
+    private let bypassRoutes: () -> [String]
 
     // Срабатывает только если в течение сессии хотя бы раз дошли до connected —
     // connecting→error не ретраит (это первичный провал коннекта, не реконнект).
@@ -92,13 +91,13 @@ final class ProxyManager: ObservableObject {
         self.mobile = LiveMobileAPI()
         self.ftun = LiveFtunAPI()
         self.localTunnelProfiles = KeychainLocalTunnelProfileStore()
-        self.bypassRoutes = BypassRoutes.build
+        self.bypassRoutes = { BypassRoutes.current() }
     }
 
     // Инжектируемый init — для тестов с MockMobileAPI/MockFtunAPI.
     init(mobile: MobileAPI, ftun: FtunAPI = LiveFtunAPI(),
          localTunnelProfiles: LocalTunnelProfileStoring = KeychainLocalTunnelProfileStore(),
-         bypassRoutes: @escaping () async -> [String] = { [] }) {
+         bypassRoutes: @escaping () -> [String] = { [] }) {
         self.mobile = mobile
         self.ftun = ftun
         self.localTunnelProfiles = localTunnelProfiles
@@ -205,39 +204,35 @@ final class ProxyManager: ObservableObject {
         guard !ftunStarted, let config, config.config.useLocalTunnel,
               let profileID = config.config.wgProfileID,
               let profile = localTunnelProfiles.load(profileID) else { return }
-        // Взводим флаг до фетча списка обхода: он ходит в сеть, а этот метод
-        // зовётся на каждый connected внешней половины — иначе реконнект во
-        // время фетча поднял бы вторую сессию ftun.
-        ftunStarted = true
-        localTunnelStartTask = Task { [weak self] in
-            guard let self else { return }
-            let bypass = await self.bypassRoutes()
-            let excludes = BypassRoutes.excludes(address: profile.address)
-            do {
-                let req = FtunStartRequest(
-                    remoteConf: profile.remoteConfText,
-                    localPrivateKey: profile.serverPrivateKey,
-                    localPeerPublicKey: profile.clientPublicKey,
-                    relayAddr: Self.relayAddrForLocalTunnel,
-                    listenPort: Self.localResponderPort,
-                    mtu: LocalConfigBuilder.mtu,
-                    bypassCIDRs: bypass,
-                    bypassExcludeCIDRs: excludes
-                )
-                // Обходные сокеты netstack'а тоже обязаны выходить мимо VPN —
-                // без protect обход замкнулся бы сам на себя (фаза 5.2).
-                self.protector.activate()
-                self.ftun.setProtect(self.protector)
-                try self.ftun.start(configJSON: req.encodedJSON())
-                ErrorLogger.shared.appendAppLine(
-                    level: "INF", message: "локальный туннель поднят, мимо туннеля: \(bypass.count) подсетей"
-                )
-            } catch {
-                self.ftunStarted = false
-                ErrorLogger.shared.appendAppLine(
-                    level: "ERR", message: "локальный туннель не поднялся: \(error.localizedDescription)"
-                )
-            }
+        let bypass = bypassRoutes()
+        do {
+            let req = FtunStartRequest(
+                remoteConf: profile.remoteConfText,
+                localPrivateKey: profile.serverPrivateKey,
+                localPeerPublicKey: profile.clientPublicKey,
+                relayAddr: Self.relayAddrForLocalTunnel,
+                listenPort: Self.localResponderPort,
+                mtu: LocalConfigBuilder.mtu,
+                bypassCIDRs: bypass,
+                bypassExcludeCIDRs: BypassRoutes.excludes(address: profile.address)
+            )
+            // Обходные сокеты netstack'а тоже обязаны выходить мимо VPN —
+            // без protect обход замкнулся бы сам на себя (фаза 5.2).
+            protector.activate()
+            ftun.setProtect(protector)
+            try ftun.start(configJSON: req.encodedJSON())
+            ftunStarted = true
+            ErrorLogger.shared.appendAppLine(
+                level: "INF", message: "локальный туннель поднят, мимо туннеля: \(bypass.count) подсетей"
+            )
+            // Список подсетей VK обновляем только теперь, когда дорога уже
+            // работает, и только ради следующего запуска — на старте этот
+            // запрос утонул бы в ещё не поднятом туннеле.
+            Task { await BypassRoutes.refresh() }
+        } catch {
+            ErrorLogger.shared.appendAppLine(
+                level: "ERR", message: "локальный туннель не поднялся: \(error.localizedDescription)"
+            )
         }
     }
 

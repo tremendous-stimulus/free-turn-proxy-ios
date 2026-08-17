@@ -34,7 +34,8 @@ enum AllowedIPsBuilder {
     )!
 
     // Запасной список VK-префиксов на случай недоступности RIPE API.
-    private static let vkFallbackCIDRs = [
+    // internal: BypassRoutes берёт их как стартовое значение, пока нет кэша.
+    static let vkFallbackCIDRs = [
         "87.240.128.0/18", "185.68.16.0/22", "93.186.224.0/21",
         "5.61.16.0/20", "212.119.96.0/20",
     ]
