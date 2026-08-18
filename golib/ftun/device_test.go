@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,6 +120,29 @@ func TestEndToEnd_PassThrough(t *testing.T) {
 	relayPort := mustGetFreePort(t)
 	relayAddr := fmt.Sprintf("127.0.0.1:%d", relayPort)
 
+	// --- fake VPS: слушает прямо на relayAddr, как обычный WG-сервер. Поднимается
+	// первым: forcedPersistentKeepalive (план, фаза 1) шлёт хендшейк-инициацию сразу
+	// по Up() внешней половины сессии, не дожидаясь исходящего пакета — как и в
+	// проде, где relay уже слушает к моменту запуска ftun, VPS должен быть готов
+	// принять этот первый хендшейк, а не только "ленивый", вызванный данными.
+	vpsTun, vpsTest := NewPipe(1280)
+	vpsBind := NewLoopbackBind()
+	vpsDev := device.NewDevice(vpsTun, vpsBind, testLogger(t, "vps"))
+	defer vpsDev.Close()
+	vpsUAPI, err := (InterfaceConf{PrivateKey: vpsPriv, ListenPort: relayPort}).BuildUAPI([]PeerConf{{
+		PublicKey:  remotePub,
+		AllowedIPs: []string{"0.0.0.0/0"},
+	}})
+	if err != nil {
+		t.Fatalf("vps BuildUAPI: %v", err)
+	}
+	if err := vpsDev.IpcSet(vpsUAPI); err != nil {
+		t.Fatalf("vps IpcSet: %v", err)
+	}
+	if err := vpsDev.Up(); err != nil {
+		t.Fatalf("vps Up: %v", err)
+	}
+
 	// --- наша сессия (device.go): responder на listenPort, initiator наружу на relayAddr ---
 	remoteConf := fmt.Sprintf(
 		"[Interface]\nPrivateKey = %s\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\n",
@@ -157,27 +181,8 @@ func TestEndToEnd_PassThrough(t *testing.T) {
 		t.Fatalf("client Up: %v", err)
 	}
 
-	// --- fake VPS: слушает прямо на relayAddr, как обычный WG-сервер ---
-	vpsTun, vpsTest := NewPipe(1280)
-	vpsBind := NewLoopbackBind()
-	vpsDev := device.NewDevice(vpsTun, vpsBind, testLogger(t, "vps"))
-	defer vpsDev.Close()
-	vpsUAPI, err := (InterfaceConf{PrivateKey: vpsPriv, ListenPort: relayPort}).BuildUAPI([]PeerConf{{
-		PublicKey:  remotePub,
-		AllowedIPs: []string{"0.0.0.0/0"},
-	}})
-	if err != nil {
-		t.Fatalf("vps BuildUAPI: %v", err)
-	}
-	if err := vpsDev.IpcSet(vpsUAPI); err != nil {
-		t.Fatalf("vps IpcSet: %v", err)
-	}
-	if err := vpsDev.Up(); err != nil {
-		t.Fatalf("vps Up: %v", err)
-	}
-
-	// Клиент шлёт IP-пакет в сторону 10.0.0.1 — это и триггерит хендшейк
-	// (WG инициирует его лениво, при первом исходящем пакете к пиру).
+	// Клиент шлёт IP-пакет в сторону 10.0.0.1, запуская хендшейк на локальной
+	// половине (у внешней половины он уже мог уйти проактивно, см. выше).
 	pkt := minimalIPv4Packet(net.ParseIP("10.8.0.2"), net.ParseIP("10.0.0.1"), 0xAA)
 	if _, err := clientTest.Write([][]byte{pkt}, 0); err != nil {
 		t.Fatalf("clientTest.Write: %v", err)
@@ -237,4 +242,215 @@ func TestEndToEnd_PassThrough(t *testing.T) {
 
 type tunReader interface {
 	Read(bufs [][]byte, sizes []int, offset int) (int, error)
+}
+
+// TestNewSession_ForcesPersistentKeepalive — план, фаза 1: keepalive
+// принудительно проставляется на ВНЕШНЮЮ половину независимо от того, что было
+// (или не было) в пользовательском remoteConf, иначе amneziawg-go сдаётся
+// навсегда после серии неудачных хендшейков и не восстанавливается сам.
+//
+// И столь же обязательно НЕ проставляется на локальную: там мы responder,
+// endpoint пира неизвестен до первого хендшейка клиента, а device.upLocked()
+// при ненулевом keepalive стреляет SendKeepalive() сразу по Up() — получаем
+// вечный "no known endpoint for peer" на уровне Errorf, пока пользователь не
+// включил AmneziaWG. См. комментарий к forcedPersistentKeepalive.
+func TestNewSession_ForcesPersistentKeepalive(t *testing.T) {
+	_, clientPub := genKeypair(t)
+	localPriv, _ := genKeypair(t)
+	remotePriv, _ := genKeypair(t)
+	_, vpsPub := genKeypair(t)
+
+	// PersistentKeepalive не задан в .conf — реалистичный случай, дефолт
+	// пользовательских конфигов.
+	remoteConf := fmt.Sprintf(
+		"[Interface]\nPrivateKey = %s\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\n",
+		remotePriv, vpsPub,
+	)
+	cfg := StartConfig{
+		RemoteConf:         remoteConf,
+		LocalPrivateKey:    localPriv,
+		LocalPeerPublicKey: clientPub,
+		RelayAddr:          "127.0.0.1:1", // не набирается в этом тесте — только сборка UAPI
+		ListenPort:         mustGetFreePort(t),
+		MTU:                1280,
+	}
+	sess, err := newSession(cfg, testLogger(t, "session"))
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	defer sess.close()
+
+	localUAPI, err := sess.local.device.IpcGet()
+	if err != nil {
+		t.Fatalf("local IpcGet: %v", err)
+	}
+	if strings.Contains(localUAPI, "persistent_keepalive_interval=25\n") {
+		t.Fatalf("на локальной половине keepalive стоять не должен:\n%s", localUAPI)
+	}
+
+	remoteUAPI, err := sess.remote.device.IpcGet()
+	if err != nil {
+		t.Fatalf("remote IpcGet: %v", err)
+	}
+	if !strings.Contains(remoteUAPI, "persistent_keepalive_interval=25\n") {
+		t.Fatalf("remote UAPI без форсированного keepalive:\n%s", remoteUAPI)
+	}
+}
+
+// TestNudge_NoActiveSession — Nudge() (api.go) обязан быть безопасным no-op
+// без запущенной сессии: лестница восстановления в ProxyManager может
+// вызвать его в состоянии гонки со Stop().
+func TestNudge_NoActiveSession(t *testing.T) {
+	Stop() // на случай, если предыдущий тест в этом же процессе оставил сессию
+	Nudge()
+}
+
+// TestSession_Nudge — session.nudge() не паникует на реальной сессии (обе
+// половины поднялись, LookupPeer находит пира по сохранённому ключу).
+func TestSession_Nudge(t *testing.T) {
+	_, clientPub := genKeypair(t)
+	localPriv, _ := genKeypair(t)
+	remotePriv, _ := genKeypair(t)
+	_, vpsPub := genKeypair(t)
+
+	remoteConf := fmt.Sprintf(
+		"[Interface]\nPrivateKey = %s\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\n",
+		remotePriv, vpsPub,
+	)
+	cfg := StartConfig{
+		RemoteConf:         remoteConf,
+		LocalPrivateKey:    localPriv,
+		LocalPeerPublicKey: clientPub,
+		RelayAddr:          "127.0.0.1:1",
+		ListenPort:         mustGetFreePort(t),
+		MTU:                1280,
+	}
+	sess, err := newSession(cfg, testLogger(t, "session"))
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	defer sess.close()
+
+	sess.nudge()
+}
+
+// errCapturingLogger — как testLogger, но ещё копит строки Errorf, чтобы тест
+// мог утверждать про отсутствие конкретной ошибки, а не только про отсутствие
+// паники.
+func errCapturingLogger(t *testing.T, tag string) (*device.Logger, func() []string) {
+	var mu sync.Mutex
+	var errs []string
+	finished := false
+	t.Cleanup(func() {
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+	verbosef := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if finished {
+			return
+		}
+		t.Logf("["+tag+"] "+format, args...)
+	}
+	errorf := func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		mu.Lock()
+		defer mu.Unlock()
+		if finished {
+			return
+		}
+		errs = append(errs, line)
+		t.Logf("["+tag+" ERR] %s", line)
+	}
+	return &device.Logger{Verbosef: verbosef, Errorf: errorf},
+		func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]string(nil), errs...)
+		}
+}
+
+// TestNewSession_LocalHalfSilentUntilClientConnects — регрессия: пока
+// пользователь не включил AmneziaWG, у пира локальной половины нет endpoint'а,
+// и любая попытка что-то ему отправить даёт "no known endpoint for peer" на
+// уровне Errorf. Раньше forcedPersistentKeepalive на локальном пире заводил
+// этот цикл сразу по Up() и потом перезапускал его каждые 25с — бесконечный
+// поток ERR в логах приложения и в телеметрии на ровном месте.
+func TestNewSession_LocalHalfSilentUntilClientConnects(t *testing.T) {
+	_, clientPub := genKeypair(t)
+	localPriv, _ := genKeypair(t)
+	remotePriv, _ := genKeypair(t)
+	_, vpsPub := genKeypair(t)
+
+	remoteConf := fmt.Sprintf(
+		"[Interface]\nPrivateKey = %s\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\n",
+		remotePriv, vpsPub,
+	)
+	logger, capturedErrors := errCapturingLogger(t, "session")
+	cfg := StartConfig{
+		RemoteConf:         remoteConf,
+		LocalPrivateKey:    localPriv,
+		LocalPeerPublicKey: clientPub,
+		RelayAddr:          fmt.Sprintf("127.0.0.1:%d", mustGetFreePort(t)),
+		ListenPort:         mustGetFreePort(t),
+		MTU:                1280,
+	}
+	sess, err := newSession(cfg, logger)
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	defer sess.close()
+
+	// Первый ретрансмит хендшейка — через RekeyTimeout (5с), но keepalive-путь
+	// стрелял немедленно из upLocked(), так что регрессия ловится сразу.
+	// Ступень 0 лестницы обязана быть так же молчалива.
+	sess.nudge()
+	time.Sleep(300 * time.Millisecond)
+
+	for _, line := range capturedErrors() {
+		if strings.Contains(line, "no known endpoint for peer") {
+			t.Fatalf("локальная половина шлёт в пира без endpoint'а: %s", line)
+		}
+	}
+}
+
+// TestParseIpcStats_UpMeansAliveNotConfigured — up обязан отражать живость
+// пира, а не факт его наличия в конфиге: на этом флаге стоят логи цепочки и
+// пропуск зонда в ProxyManager, и константа true делала оба бесполезными.
+func TestParseIpcStats_UpMeansAliveNotConfigured(t *testing.T) {
+	const peerLine = "public_key=0000000000000000000000000000000000000000000000000000000000000000\n"
+
+	t.Run("хендшейка не было — не живой", func(t *testing.T) {
+		up, age, _, _, err := parseIpcStats(peerLine + "last_handshake_time_sec=0\n")
+		if err != nil {
+			t.Fatalf("parseIpcStats: %v", err)
+		}
+		if up || age != 0 {
+			t.Fatalf("ожидали up=false age=0, получили up=%v age=%d", up, age)
+		}
+	})
+
+	t.Run("свежий хендшейк — живой", func(t *testing.T) {
+		raw := fmt.Sprintf(peerLine+"last_handshake_time_sec=%d\n", time.Now().Unix()-5)
+		up, age, _, _, err := parseIpcStats(raw)
+		if err != nil {
+			t.Fatalf("parseIpcStats: %v", err)
+		}
+		if !up || age < 4 || age > 7 {
+			t.Fatalf("ожидали up=true age≈5, получили up=%v age=%d", up, age)
+		}
+	})
+
+	t.Run("хендшейк старше RejectAfterTime — не живой", func(t *testing.T) {
+		raw := fmt.Sprintf(peerLine+"last_handshake_time_sec=%d\n", time.Now().Unix()-200)
+		up, age, _, _, err := parseIpcStats(raw)
+		if err != nil {
+			t.Fatalf("parseIpcStats: %v", err)
+		}
+		if up {
+			t.Fatalf("хендшейк %dс назад не может считаться живым", age)
+		}
+	})
 }

@@ -4,9 +4,16 @@ import XCTest
 @MainActor
 final class ProxyManagerTests: XCTestCase {
 
-    private func manager() -> (ProxyManager, MockMobileAPI) {
+    // reachabilityProbe по умолчанию — «всегда достижимо»: без этого любой
+    // авто-ретрай (ступени 0–1 лестницы, план фаза 2.3) бил бы в реальную
+    // сеть через 3с cheap-step follow-up. Тесты, которым нужен провал
+    // (эскалация лестницы), передают свой замыкание.
+    private func manager(
+        reachabilityProbe: @escaping (@escaping (Bool) -> Void) -> Void = { $0(true) },
+        networkPath: NetworkPathProviding = MockNetworkPath()
+    ) -> (ProxyManager, MockMobileAPI) {
         let mock = MockMobileAPI()
-        return (ProxyManager(mobile: mock), mock)
+        return (ProxyManager(mobile: mock, networkPath: networkPath, reachabilityProbe: reachabilityProbe), mock)
     }
 
     // ProxyManager зовёт ftun с отдельной очереди (cgo блокирующий, с главного
@@ -23,7 +30,7 @@ final class ProxyManagerTests: XCTestCase {
         let localStore = InMemoryLocalWGConfigStore()
         let externalStore = InMemoryExternalWGConfigStore()
         return (ProxyManager(mobile: mobile, ftun: ftun, localWGConfig: localStore, externalWGConfig: externalStore,
-                             ftunQueue: ftunQueue),
+                             ftunQueue: ftunQueue, networkPath: MockNetworkPath(), reachabilityProbe: { $0(true) }),
                 mobile, ftun, localStore, externalStore)
     }
 
@@ -179,8 +186,13 @@ final class ProxyManagerTests: XCTestCase {
         XCTAssertEqual(pm.retryBackoffSeconds, 0)
     }
 
-    func test_autoReconnect_performsRestart_afterBackoff() async throws {
-        let (pm, mock) = manager()
+    // Лестница восстановления (план, фаза 2.3): первая попытка — мягкий
+    // wake(), не restartMobile — без WG-in-WG (ftunStarted == false в этих
+    // тестах) nudge падает на wake автоматически. restartMobile — только
+    // ступень 2, когда дешёвые ступени не привели к восстановлению
+    // (reachabilityProbe стабильно возвращает false).
+    func test_autoReconnect_firstAttempt_performsWake_notRestart() async throws {
+        let (pm, mock) = manager(reachabilityProbe: { $0(false) })
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
 
@@ -190,13 +202,34 @@ final class ProxyManagerTests: XCTestCase {
         pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
         XCTAssertEqual(pm.state, .retryBackoff)
 
-        // Ждём пока выполнится первый ретрай (бекофф ~1с).
         let deadline = Date().addingTimeInterval(3.0)
-        while Date() < deadline, mock.restartCallCount == restartsBefore {
+        while Date() < deadline, mock.wakeCallCount == 0 {
             try? await Task.sleep(for: .milliseconds(50))
         }
+        XCTAssertGreaterThan(mock.wakeCallCount, 0, "Первая ступень лестницы — mobile.wake(), не restart")
+        XCTAssertEqual(mock.restartCallCount, restartsBefore, "restartMobile не должен вызываться на первой ступени")
+        pm.stop()
+    }
+
+    // Ступени 0–1 не пересоздают сессию — если reachabilityProbe стабильно
+    // говорит «не восстановилось», лестница обязана эскалировать до
+    // restartMobile (ступень 2), а не крутиться на wake() вечно.
+    func test_autoReconnect_escalatesToRestart_whenCheapStepsDontRecover() async throws {
+        let (pm, mock) = manager(reachabilityProbe: { $0(false) })
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        let restartsBefore = mock.restartCallCount
+
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+
+        let deadline = Date().addingTimeInterval(25.0)
+        while Date() < deadline, mock.restartCallCount == restartsBefore {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         XCTAssertGreaterThan(mock.restartCallCount, restartsBefore,
-                             "После бекоффа должен быть выполнен mobile.restart")
+                             "После неудачных дешёвых ступеней должен быть выполнен restartMobile")
         pm.stop()
     }
 
@@ -218,24 +251,22 @@ final class ProxyManagerTests: XCTestCase {
         pm.stop()
     }
 
-    func test_autoReconnect_stopsAfterFiveAttempts() throws {
+    // План, фаза 2.4: бюджет попыток убран целиком — туннель не должен
+    // гаситься независимо от того, сколько раз подряд пришёл error.
+    func test_autoReconnect_neverGivesUp() throws {
         let (pm, mock) = manager()
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
 
-        for _ in 1...5 {
+        for _ in 1...8 {
             pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
-            XCTAssertEqual(pm.state, .retryBackoff)
+            XCTAssertNotEqual(pm.state, .error, "реконнект не должен сдаваться и переходить в .error")
             XCTAssertTrue(pm.isRunning)
         }
-
-        // Шестой заход — провал пятой попытки, бюджет исчерпан.
-        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
-        XCTAssertEqual(pm.state, .error)
-        XCTAssertFalse(pm.isRunning)
-        XCTAssertTrue(mock.stopCalled)
+        XCTAssertFalse(mock.stopCalled, "stop() не должен вызываться из-за исчерпанного бюджета — бюджета больше нет")
+        pm.stop()
     }
 
     func test_autoReconnect_successResetsAttemptBudget() throws {
@@ -251,11 +282,132 @@ final class ProxyManagerTests: XCTestCase {
 
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
 
+        // После успешного реконнекта лестница обязана начаться заново со
+        // ступени 0 — бекофф снова ~1с, а не продолжает расти с прошлого эпизода.
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        XCTAssertEqual(pm.state, .retryBackoff)
+        XCTAssertLessThanOrEqual(pm.retryBackoffSeconds, 1)
+
         for _ in 1...5 {
             pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
             XCTAssertEqual(pm.state, .retryBackoff, "Бюджет попыток должен был обнулиться на connected")
             XCTAssertTrue(pm.isRunning)
         }
+        pm.stop()
+    }
+
+    // У ядра свой watchdog, и оно умеет починиться само, пока мы отсиживаем
+    // бекофф. handleState(connected) закрывает эпизод, но запланированный
+    // work item живёт дальше — без гарда по inRetryCycle он срабатывал уже
+    // поверх здоровой сессии и ронял рабочий туннель на ровном месте.
+    func test_autoReconnect_pendingStep_doesNotFireAfterSelfRecovery() async throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        XCTAssertEqual(pm.state, .retryBackoff)
+
+        // Ядро починилось само, не дожидаясь нашей ступени (бекофф ~1с).
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        let restartsBefore = mock.restartCallCount
+        let wakesBefore = mock.wakeCallCount
+
+        try? await Task.sleep(for: .milliseconds(1800))
+
+        XCTAssertEqual(mock.wakeCallCount, wakesBefore,
+                       "протухшая ступень не должна будить здоровую сессию")
+        XCTAssertEqual(mock.restartCallCount, restartsBefore,
+                       "протухшая ступень не должна перезапускать здоровую сессию")
+        XCTAssertEqual(pm.state, .connected, "состояние не должно уехать в .connecting")
+        pm.stop()
+    }
+
+    // MARK: – Смена сети (план, фаза 2.1/2.2/2.4)
+
+    // Сокеты ядра привязаны IP_BOUND_IF к конкретному индексу интерфейса —
+    // после LTE↔Wi-Fi они мертвы навсегда, ждать зонда ~5с незачем: реконнект
+    // обязан случиться немедленно, без бекоффа.
+    func test_networkPath_interfaceChange_triggersImmediateReconnect() throws {
+        let netPath = MockNetworkPath()
+        let (pm, mock) = manager(networkPath: netPath)
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        let restartsBefore = mock.restartCallCount
+        netPath.simulate(NetworkPathSnapshot(isSatisfied: true, interfaceIndex: 2))
+
+        XCTAssertGreaterThan(mock.restartCallCount, restartsBefore,
+                             "Смена физического интерфейса форсирует restartMobile немедленно, без бекоффа")
+        XCTAssertEqual(pm.retryBackoffSeconds, 0)
+        pm.stop()
+    }
+
+    // Путь обновился, но физический интерфейс тот же — не повод дёргать
+    // реконнект (NWPathMonitor шлёт колбэк не только на смену интерфейса).
+    func test_networkPath_sameInterface_doesNotTriggerReconnect() throws {
+        let netPath = MockNetworkPath()
+        let (pm, mock) = manager(networkPath: netPath)
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        let restartsBefore = mock.restartCallCount
+        netPath.simulate(NetworkPathSnapshot(isSatisfied: true, interfaceIndex: 1))
+
+        XCTAssertEqual(mock.restartCallCount, restartsBefore)
+        XCTAssertEqual(pm.state, .connected)
+        pm.stop()
+    }
+
+    // Путь unsatisfied во время активной сессии — не жжём попытки, ждём
+    // молча. Появление пути — немедленный реконнект без бекоффа.
+    func test_networkPath_unsatisfied_entersWaitingNetwork_withoutBurningAttempts() throws {
+        let netPath = MockNetworkPath()
+        let (pm, mock) = manager(networkPath: netPath)
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        netPath.simulate(NetworkPathSnapshot(isSatisfied: false, interfaceIndex: 1))
+        XCTAssertEqual(pm.state, .waitingNetwork)
+        XCTAssertEqual(pm.retryBackoffSeconds, 0)
+
+        let restartsBefore = mock.restartCallCount
+        let wakesBefore = mock.wakeCallCount
+        netPath.simulate(NetworkPathSnapshot(isSatisfied: true, interfaceIndex: 1))
+
+        // Реконнект пошёл немедленно (ступень 0/1 — wake, т.к. WG-in-WG тут не
+        // поднят) — попытки не потрачены впустую на ожидание сети как таковой.
+        XCTAssertTrue(mock.wakeCallCount > wakesBefore || mock.restartCallCount > restartsBefore)
+        pm.stop()
+    }
+
+    // Wi-Fi → (путь пропал) → LTE. У unsatisfied-пути физического интерфейса
+    // нет, physicalIndex отдаёт 0 — и если запомнить этот ноль, то возврат сети
+    // на другом интерфейсе перестаёт выглядеть сменой интерфейса. А сокеты ядра
+    // при этом так же мертвы (IP_BOUND_IF на старый индекс), и дешёвые ступени
+    // их не чинят: лестница обязана начаться сразу с restartMobile.
+    func test_networkPath_interfaceChangedWhileWaiting_escalatesToRestart() throws {
+        let netPath = MockNetworkPath()
+        let (pm, mock) = manager(networkPath: netPath)
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        netPath.simulate(NetworkPathSnapshot(isSatisfied: false, interfaceIndex: 0))
+        XCTAssertEqual(pm.state, .waitingNetwork)
+
+        let restartsBefore = mock.restartCallCount
+        let wakesBefore = mock.wakeCallCount
+        netPath.simulate(NetworkPathSnapshot(isSatisfied: true, interfaceIndex: 2))
+
+        XCTAssertGreaterThan(mock.restartCallCount, restartsBefore,
+                             "сеть вернулась на другом интерфейсе — сразу ступень 2")
+        XCTAssertEqual(mock.wakeCallCount, wakesBefore,
+                       "дешёвые ступени не трогают protect-привязку сокетов и тут бесполезны")
         pm.stop()
     }
 

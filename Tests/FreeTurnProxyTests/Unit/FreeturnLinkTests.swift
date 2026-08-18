@@ -21,7 +21,6 @@ final class FreeturnLinkTests: XCTestCase {
         let cfg = try FreeturnLink.parse(link, defaultName: "fallback")
         XCTAssertEqual(cfg.peer, "1.2.3.4:56000")
         XCTAssertEqual(cfg.transport, "tcp")
-        XCTAssertEqual(cfg.mode, "udp")
         XCTAssertEqual(cfg.obfProfile, "rtpopus")
         XCTAssertEqual(cfg.obfKey, "d823fa")
         XCTAssertEqual(cfg.threads, 10)
@@ -33,13 +32,12 @@ final class FreeturnLinkTests: XCTestCase {
         let json = #"{"v":1,"provider":"vk","peer":"1.2.3.4:5"}"#
         let cfg = try FreeturnLink.parse("freeturn://\(base64URL(json))", defaultName: "fallback")
         XCTAssertEqual(cfg.name, "fallback")
-        XCTAssertEqual(cfg.mode, "udp")
         XCTAssertEqual(cfg.transport, "udp")
         XCTAssertEqual(cfg.obfProfile, "none")
         XCTAssertEqual(cfg.dnsMode, "auto")
     }
 
-    // Android кладёт нестандартное wg — не входит в схему v2.1.1, но должно
+    // Android кладёт нестандартное wg — не входит в схему v3.1.0, но должно
     // проходить разбор (лишние поля не ломают JSON-декодер), не влияя на SavedConfig.
     func test_parse_ignoresUnknownWgField() throws {
         let json = #"{"v":1,"provider":"vk","peer":"1.2.3.4:5","wg":"[Interface]\nPrivateKey = x"}"#
@@ -91,7 +89,7 @@ final class FreeturnLinkTests: XCTestCase {
     func test_encode_roundTripsThroughParse() throws {
         let original = SavedConfig(
             name: "n", peer: "5.6.7.8:9", obfKey: "abc123", transport: "tcp",
-            obfProfile: "rtpopus2", mode: "tcp", bond: true, threads: 4, streamsPerCred: 2,
+            obfProfile: "rtpopus2", threads: 4, streamsPerCred: 2,
             dnsMode: "doh", turnHost: "", turnPort: "", debug: false
         )
         let link = FreeturnLink.encode(config: original, name: "n")
@@ -101,8 +99,6 @@ final class FreeturnLinkTests: XCTestCase {
         XCTAssertEqual(decoded.transport, original.transport)
         XCTAssertEqual(decoded.obfProfile, original.obfProfile)
         XCTAssertEqual(decoded.obfKey, original.obfKey)
-        XCTAssertEqual(decoded.mode, original.mode)
-        XCTAssertEqual(decoded.bond, original.bond)
         XCTAssertEqual(decoded.threads, original.threads)
         XCTAssertEqual(decoded.streamsPerCred, original.streamsPerCred)
         XCTAssertEqual(decoded.dnsMode, original.dnsMode)

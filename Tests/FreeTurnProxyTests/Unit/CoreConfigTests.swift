@@ -1,7 +1,7 @@
 import XCTest
 @testable import FreeTurnProxy
 
-// Ядро v2.1.1 декодирует ClientJSON с DisallowUnknownFields() (internal/config/json.go):
+// Ядро v3.1.0 декодирует ClientJSON с DisallowUnknownFields() (internal/config/json.go):
 // лишнее или переименованное поле здесь ломает старт туннеля в рантайме, а не на
 // сборке. Этот тест сверяет набор ключей нашего энкодера с полями схемы ядра —
 // если кто-то переименует/добавит поле в CoreConfig не туда, тест упадёт раньше
@@ -28,7 +28,7 @@ final class CoreConfigTests: XCTestCase {
         XCTAssertEqual(keys(of: try XCTUnwrap(json["turn"] as? [String: Any])),
                        ["n", "transport", "host", "port"])
         XCTAssertEqual(keys(of: try XCTUnwrap(json["proxy"] as? [String: Any])),
-                       ["mode", "bond", "listen"])
+                       ["listen"])
         XCTAssertEqual(keys(of: try XCTUnwrap(json["vk"] as? [String: Any])),
                        ["links", "streamsPerCred", "manualCaptcha", "platform"])
         XCTAssertEqual(keys(of: try XCTUnwrap(json["obf"] as? [String: Any])),

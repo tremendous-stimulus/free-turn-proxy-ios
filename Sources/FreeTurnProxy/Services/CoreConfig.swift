@@ -1,6 +1,6 @@
 import Foundation
 
-// Codable-зеркало internal/config.ClientJSON@v2.1.1 (mobile/api.go: ParseClientJSON,
+// Codable-зеркало internal/config.ClientJSON@v3.1.0 (mobile/api.go: ParseClientJSON,
 // mobile.go: startLocked). Декодер ядра стоит на DisallowUnknownFields() — лишнее
 // или переименованное поле здесь валит старт туннеля в рантайме, а не на сборке
 // (см. CoreConfigTests: схема сверяется полем в полe с internal/config/json.go).
@@ -30,8 +30,6 @@ struct CoreConfig: Codable, Equatable {
     }
 
     struct Proxy: Codable, Equatable {
-        var mode: String = "udp"
-        var bond: Bool = false
         var listen: String = "127.0.0.1:9000"
     }
 

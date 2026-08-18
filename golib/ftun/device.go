@@ -61,9 +61,65 @@ func (c StartConfig) validate() error {
 	return nil
 }
 
+// forcedPersistentKeepalive — вопреки .conf пользователя и умолчанию,
+// keepalive всегда включён на ВНЕШНЕЙ половине. Без него amneziawg-go
+// сдаётся навсегда после MaxTimerHandshakes неудачных хендшейков
+// (device/timers.go: expiredRetransmitHandshake) и не восстанавливается сам
+// даже когда причина обрыва (смена сети, кратковременный дроп) уже прошла —
+// см. план /Users/stepan/.claude/plans/swirling-spinning-meteor.md, причина
+// №1. Keepalive перевзводит ретрансмит хендшейка на каждый пакет
+// (timersAnyAuthenticatedPacketTraversal), поэтому «giving up» перестаёт
+// быть терминальным.
+//
+// На ЛОКАЛЬНОЙ половине его ставить нельзя, и это не вкусовщина. Локальная
+// половина — responder: Endpoint её пира (AmneziaWG на устройстве) неизвестен,
+// пока клиент сам не пришлёт первый хендшейк. А device.upLocked() при
+// ненулевом keepalive дёргает SendKeepalive() сразу по Up() → нет keypair →
+// SendHandshakeInitiation → SendBuffers → "no known endpoint for peer" →
+// device.Logger.Errorf. Дальше самоподдерживающийся цикл: ретрансмит каждые
+// 5с (18 попыток), «giving up» гасит sendKeepalive, но НЕ persistentKeepalive,
+// тот через 25с снова зовёт SendKeepalive → handshakeAttempts сбрасывается
+// в 0 → по кругу. Пока пользователь не включил VPN (нормальный порядок
+// действий!), это бесконечный поток ERR в логах и в телеметрии.
+//
+// Направление, которое реально надо держать живым, — клиент → ftun, и оно
+// закрывается строкой PersistentKeepalive в конфиге, который мы отдаём в
+// AmneziaWG (Sources/.../LocalConfigBuilder.swift): там инициатор, и он
+// endpoint знает.
+const forcedPersistentKeepalive = 25
+
 // half — одна из двух половин дороги (см. план, раздел "Экран туннеля").
 type half struct {
 	device *device.Device
+	// peerKeys — публичные ключи пиров этой половины, для Nudge() (api.go):
+	// программный аналог тумблера AmneziaWG, LookupPeer+SendHandshakeInitiation
+	// на сдавшемся пире. Заполнены только у внешней половины — локальную
+	// пинать нечем и незачем, см. session.nudge.
+	peerKeys []device.NoisePublicKey
+}
+
+// nudge шлёт свежую (не-retry) инициацию хендшейка каждому пиру половины —
+// SendHandshakeInitiation(isRetry: false) сбрасывает handshakeAttempts, то
+// есть заново взводит ретрансмиты у пира, который уже "giving up". No-op,
+// если пир не найден (например, устройство уже закрыто).
+func (h *half) nudge() {
+	for _, pk := range h.peerKeys {
+		if peer := h.device.LookupPeer(pk); peer != nil {
+			peer.SendHandshakeInitiation(false)
+		}
+	}
+}
+
+func keyToNoisePublicKey(base64Key string) (device.NoisePublicKey, error) {
+	var pk device.NoisePublicKey
+	hexKey, err := keyToHex(base64Key)
+	if err != nil {
+		return pk, err
+	}
+	if err := pk.FromHex(hexKey); err != nil {
+		return pk, fmt.Errorf("NoisePublicKey: %w", err)
+	}
+	return pk, nil
 }
 
 func (h *half) stats() (up bool, handshakeAgeSec int64, txBytes, rxBytes int64, err error) {
@@ -74,8 +130,15 @@ func (h *half) stats() (up bool, handshakeAgeSec int64, txBytes, rxBytes int64, 
 	return parseIpcStats(raw)
 }
 
-// parseIpcStats достаёт только то, что нужно Stats() (api.go): само наличие
-// секции пира уже значит, что девайс поднят; свежий handshake — что он жив.
+// parseIpcStats достаёт только то, что нужно Stats() (api.go).
+//
+// up половины — это «пир жив», а не «пир сконфигурирован». Раньше флаг
+// взводился по наличию строки public_key, то есть у работающего девайса был
+// константой true: переход up→down не мог случиться никогда, и потребители
+// (логи цепочки и пропуск зонда в ProxyManager) молча получали бесполезный
+// сигнал. Живой признак один — свежесть хендшейка: по RejectAfterTime
+// (device/constants.go, 180с) keypair перестаёт годиться, и всё, что старше,
+// живым считать нельзя. handshakeSec == 0 — хендшейка не было ни разу.
 func parseIpcStats(raw string) (up bool, handshakeAgeSec int64, txBytes, rxBytes int64, err error) {
 	var handshakeSec int64
 	for _, line := range strings.Split(raw, "\n") {
@@ -84,8 +147,6 @@ func parseIpcStats(raw string) (up bool, handshakeAgeSec int64, txBytes, rxBytes
 			continue
 		}
 		switch key {
-		case "public_key":
-			up = true
 		case "last_handshake_time_sec":
 			handshakeSec, err = strconv.ParseInt(value, 10, 64)
 			if err != nil {
@@ -106,9 +167,11 @@ func parseIpcStats(raw string) (up bool, handshakeAgeSec int64, txBytes, rxBytes
 		}
 	}
 	if handshakeSec == 0 {
-		return up, 0, txBytes, rxBytes, nil
+		return false, 0, txBytes, rxBytes, nil
 	}
-	return up, time.Now().Unix() - handshakeSec, txBytes, rxBytes, nil
+	age := time.Now().Unix() - handshakeSec
+	up = age >= 0 && age < int64(device.RejectAfterTime.Seconds())
+	return up, age, txBytes, rxBytes, nil
 }
 
 // session — обе половины дороги плюс труба между ними (pipe.go). Владеет
@@ -151,6 +214,8 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 		PrivateKey: cfg.LocalPrivateKey,
 		ListenPort: cfg.ListenPort,
 	}
+	// Без PersistentKeepalive — см. комментарий к forcedPersistentKeepalive:
+	// у responder'а нет endpoint'а пира до первого хендшейка клиента.
 	localPeers := []PeerConf{{
 		PublicKey:  cfg.LocalPeerPublicKey,
 		AllowedIPs: []string{"0.0.0.0/0", "::/0"},
@@ -172,6 +237,7 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	remotePeers := make([]PeerConf, len(remoteConf.Peers))
 	for i, p := range remoteConf.Peers {
 		p.Endpoint = cfg.RelayAddr // апстрим всегда идёт через локальный релей, не напрямую
+		p.PersistentKeepalive = forcedPersistentKeepalive
 		remotePeers[i] = p
 	}
 	remoteIface := remoteConf.Interface
@@ -182,6 +248,13 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 		remoteTun.Close()
 		rt.close()
 		return nil, fmt.Errorf("не удалось собрать UAPI внешнего девайса: %w", err)
+	}
+	remotePeerKeys, err := peerKeysOf(remotePeers)
+	if err != nil {
+		localDev.Close()
+		remoteTun.Close()
+		rt.close()
+		return nil, fmt.Errorf("ключи пиров внешнего девайса: %w", err)
 	}
 
 	remoteDev := device.NewDevice(remoteTun, NewLoopbackBind(), logger)
@@ -209,9 +282,31 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 
 	return &session{
 		local:  half{device: localDev},
-		remote: half{device: remoteDev},
+		remote: half{device: remoteDev, peerKeys: remotePeerKeys},
 		router: rt,
 	}, nil
+}
+
+func peerKeysOf(peers []PeerConf) ([]device.NoisePublicKey, error) {
+	keys := make([]device.NoisePublicKey, len(peers))
+	for i, p := range peers {
+		pk, err := keyToNoisePublicKey(p.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("[Peer] #%d: %w", i, err)
+		}
+		keys[i] = pk
+	}
+	return keys, nil
+}
+
+// nudge — см. half.nudge. Пинаем только внешнюю половину: ступень 0 лестницы
+// восстановления по плану (фаза 2.3) адресована именно ей («remote-половина
+// молчит»), а инициация в сторону локального пира до того, как пользователь
+// включил AmneziaWG, — гарантированный "no known endpoint for peer" на уровне
+// Errorf плюс сброс handshakeAttempts, то есть новая серия ретрансмитов в
+// пустоту (см. комментарий к forcedPersistentKeepalive).
+func (s *session) nudge() {
+	s.remote.nudge()
 }
 
 func (s *session) close() {

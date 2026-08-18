@@ -9,6 +9,11 @@ protocol MobileAPI {
     func start(configJSON: String) throws
     func restart(configJSON: String) throws
     func stop()
+    // Мягкий реконнект без пересоздания сессии: форсирует пересоздание
+    // TURN-аллокаций (mobile/api.go@v3.1.0, Wake() → internal/session
+    // Session.Wake()). Внутри уже гардировано от прерывания капчи/коннекта —
+    // вызывать можно в любой момент, no-op без активной сессии.
+    func wake()
     func getState() -> MobileSnapshot?
     func dumpLogs() -> String
     func clearLogs()
@@ -35,6 +40,10 @@ struct LiveMobileAPI: MobileAPI {
 
     func stop() {
         MobileStop()
+    }
+
+    func wake() {
+        MobileWake()
     }
 
     func getState() -> MobileSnapshot? {

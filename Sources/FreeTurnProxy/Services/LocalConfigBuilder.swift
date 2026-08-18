@@ -26,6 +26,12 @@ enum LocalConfigBuilder {
         lines.append("PublicKey = \(local.serverPublicKey)")
         lines.append("Endpoint = 127.0.0.1:\(local.port)")
         lines.append("AllowedIPs = \(allowedIPs)")
+        // Держит хендшейк живым даже когда AmneziaWG сама какое-то время не
+        // шлёт трафик в utun (план, фаза 1) — без этого локальная половина
+        // дороги может "сдаться" симметрично внешней, если пользователь долго
+        // не генерирует трафик. golib/ftun форсирует то же самое на
+        // responder'е независимо от этой строки.
+        lines.append("PersistentKeepalive = 25")
         return lines.joined(separator: "\n")
     }
 }
