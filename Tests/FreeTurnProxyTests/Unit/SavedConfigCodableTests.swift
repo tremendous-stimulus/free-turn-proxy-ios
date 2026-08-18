@@ -52,4 +52,29 @@ final class SavedConfigCodableTests: XCTestCase {
         let c = SavedConfig(name: "n", peer: "1.2.3.4:5")
         XCTAssertEqual(c.obfProfile, "none")
     }
+
+    // MARK: – useLocalTunnel
+
+    // Ключа useLocalTunnel в записи нет вовсе — значит профиль сохранён до
+    // появления WG-in-WG, и обязан остаться в старом режиме. Дефолт true в
+    // memberwise-инициализаторе — это для действительно новых профилей,
+    // decodeIfPresent тут при отсутствии ключа обязан вернуть false.
+    func test_decodeLegacyRecord_useLocalTunnel_defaultsToFalse() throws {
+        let cfg = try JSONDecoder().decode(SavedConfig.self, from: legacyJSON(obfKey: ""))
+        XCTAssertFalse(cfg.useLocalTunnel)
+    }
+
+    // Новый профиль (через init, а не декодер) — наоборот, сразу в WG-in-WG.
+    func test_init_newProfile_useLocalTunnelDefaultsToTrue() {
+        let c = SavedConfig(name: "n", peer: "1.2.3.4:5")
+        XCTAssertTrue(c.useLocalTunnel)
+    }
+
+    // Явно сохранённое значение (не важно какое) должно уцелеть при round-trip.
+    func test_roundTrip_preservesExplicitUseLocalTunnel() throws {
+        let original = SavedConfig(name: "n", peer: "1.2.3.4:5", useLocalTunnel: false)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(SavedConfig.self, from: data)
+        XCTAssertFalse(decoded.useLocalTunnel)
+    }
 }
