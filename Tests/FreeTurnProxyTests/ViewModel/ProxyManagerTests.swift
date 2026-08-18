@@ -385,6 +385,32 @@ final class ProxyManagerTests: XCTestCase {
         pm.stop()
     }
 
+    // Wi-Fi → (путь пропал) → LTE. У unsatisfied-пути физического интерфейса
+    // нет, physicalIndex отдаёт 0 — и если запомнить этот ноль, то возврат сети
+    // на другом интерфейсе перестаёт выглядеть сменой интерфейса. А сокеты ядра
+    // при этом так же мертвы (IP_BOUND_IF на старый индекс), и дешёвые ступени
+    // их не чинят: лестница обязана начаться сразу с restartMobile.
+    func test_networkPath_interfaceChangedWhileWaiting_escalatesToRestart() throws {
+        let netPath = MockNetworkPath()
+        let (pm, mock) = manager(networkPath: netPath)
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        netPath.simulate(NetworkPathSnapshot(isSatisfied: false, interfaceIndex: 0))
+        XCTAssertEqual(pm.state, .waitingNetwork)
+
+        let restartsBefore = mock.restartCallCount
+        let wakesBefore = mock.wakeCallCount
+        netPath.simulate(NetworkPathSnapshot(isSatisfied: true, interfaceIndex: 2))
+
+        XCTAssertGreaterThan(mock.restartCallCount, restartsBefore,
+                             "сеть вернулась на другом интерфейсе — сразу ступень 2")
+        XCTAssertEqual(mock.wakeCallCount, wakesBefore,
+                       "дешёвые ступени не трогают protect-привязку сокетов и тут бесполезны")
+        pm.stop()
+    }
+
     // MARK: – WG-in-WG (план, фаза 2)
 
     func test_localTunnel_startsAfterFirstConnected() throws {

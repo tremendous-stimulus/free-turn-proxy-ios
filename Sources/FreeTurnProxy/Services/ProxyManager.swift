@@ -489,14 +489,26 @@ final class ProxyManager: ObservableObject {
     private func handleNetworkPathChange(_ snapshot: NetworkPathSnapshot) {
         guard isRunning else { return }
         let previousIndex = lastInterfaceIndex
-        lastInterfaceIndex = snapshot.interfaceIndex
+        // Помним последний ИЗВЕСТНЫЙ индекс, а не последний присланный: у
+        // unsatisfied-пути физического интерфейса нет и physicalIndex отдаёт 0.
+        // Затирая им lastInterfaceIndex, мы теряли память о том, с какого
+        // интерфейса ушли, и переход Wi-Fi → (провал) → LTE переставал
+        // выглядеть сменой интерфейса.
+        if snapshot.interfaceIndex != 0 {
+            lastInterfaceIndex = snapshot.interfaceIndex
+        }
         logChainTransition("путь сети", up: snapshot.isSatisfied)
 
         if !snapshot.isSatisfied {
             enterWaitingNetwork()
             return
         }
+        let interfaceChanged = previousIndex != 0 && snapshot.interfaceIndex != 0
+            && previousIndex != snapshot.interfaceIndex
         if state == .waitingNetwork {
+            // Сеть вернулась на ДРУГОМ интерфейсе — сокеты ядра так же мертвы,
+            // как при смене под живой сессией, и дешёвые ступени их не чинят.
+            if interfaceChanged { raiseRecoveryFloorToRestart() }
             leaveWaitingNetwork()
             return
         }
@@ -504,7 +516,7 @@ final class ProxyManager: ObservableObject {
         // привязаны к интерфейсу, которого больше нет, и мертвы навсегда
         // (план, «Разбор», причина 2). appearance из 0 — это первый снимок
         // после activate(), а не смена, её не считаем.
-        if previousIndex != 0, snapshot.interfaceIndex != 0, previousIndex != snapshot.interfaceIndex {
+        if interfaceChanged {
             handleInterfaceChanged()
         }
     }
@@ -532,14 +544,18 @@ final class ProxyManager: ObservableObject {
         triggerAutoReconnect(immediate: true)
     }
 
+    // Ступени 0–1 не трогают protect-привязку сокетов, поэтому при смене
+    // интерфейса начинать с них — гарантированно потерянное время.
+    private func raiseRecoveryFloorToRestart() {
+        autoReconnectAttempt = max(autoReconnectAttempt, 2)
+    }
+
     // Физический интерфейс сменился под живой сессией — сокеты ядра мертвы
     // навсегда (IP_BOUND_IF на старый индекс), ждать зонда ~5с незачем.
-    // Ступени 0–1 тут не помогут (они не трогают protect-привязку сокетов),
-    // поэтому сразу поднимаем пол лестницы до restartMobile.
     private func handleInterfaceChanged() {
         guard isRunning, config != nil, everConnected else { return }
         ErrorLogger.shared.appendAppLine(level: "DBG", message: "сменился физический интерфейс сети")
-        autoReconnectAttempt = max(autoReconnectAttempt, 2)
+        raiseRecoveryFloorToRestart()
         beginRetryCycleIfNeeded(reason: "сменился физический интерфейс сети")
         triggerAutoReconnect(immediate: true)
     }
