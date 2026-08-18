@@ -149,12 +149,32 @@ final class ProxyManager: ObservableObject {
         }
     }
 
+    // Тон keepalive звучит во всех состояниях, кроме «Не подключено» и «Ошибка».
+    // Именно состояние, а не вызов start(), управляет звуком: раньше аудио
+    // поднималось только в start(), а глушилось в handleState на любом
+    // не-active состоянии — после смены сети звук пропадал навсегда (путь
+    // реконнекта идёт через restartMobile и аудио не трогает), iOS усыпляла
+    // процесс, и вместе с ним вставали таймеры реконнекта и весь путь данных.
+    private static let keepAliveStates: Set<TunnelState> = [
+        .connecting, .connected, .captcha, .retryBackoff, .waitingNetwork
+    ]
+
+    private func syncKeepAlive(_ state: TunnelState) {
+        guard Self.keepAliveStates.contains(state) else {
+            audio.stop()
+            return
+        }
+        try? audio.start()
+    }
+
     // Единственная точка мутации state — чтобы «ядро/TURN» звено цепочки
     // логировалось из одного места независимо от того, откуда пришла смена
-    // (push от Go, лестница восстановления, waitingNetwork).
+    // (push от Go, лестница восстановления, waitingNetwork), и оттуда же
+    // управлялся keepalive.
     private func setState(_ newState: TunnelState) {
         let wasConnected = state == .connected
         state = newState
+        syncKeepAlive(newState)
         let isConnected = newState == .connected
         if wasConnected != isConnected {
             logChainTransition("ядро/TURN", up: isConnected)
@@ -433,7 +453,7 @@ final class ProxyManager: ObservableObject {
             }
             ErrorLogger.shared.shipBatch()
             stopTimers()
-            audio.stop()
+            // audio здесь не трогаем — им управляет setState через syncKeepAlive.
         }
     }
 
@@ -719,6 +739,10 @@ final class ProxyManager: ObservableObject {
     private func startActiveTimers() {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
+            // Состояние может стоять на месте часами (.connected), а звук —
+            // умереть от внешней причины; без этой проверки его никто не поднял
+            // бы до следующей смены состояния, которой уже не случится.
+            if Self.keepAliveStates.contains(self.state) { self.audio.ensurePlaying() }
             let snap = self.mobile.getState()
             DispatchQueue.main.async {
                 self.txTotalBytes = snap?.txTotal ?? 0
