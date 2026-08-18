@@ -825,14 +825,22 @@ final class ProxyManager: ObservableObject {
         }
     }
 
-    // Дешёвые локальные индикаторы уже говорят «живо» — растёт rxTotal ядра,
-    // и (если WG-in-WG поднят) внешняя половина ftun отвечала на хендшейк
-    // недавно. Экономим сетевой запрос там, где и так видно, что туннель жив.
+    // Дешёвые локальные индикаторы уже говорят «живо»: растёт rxTotal ядра И
+    // внешняя половина ftun хендшейкалась только что. Оба условия обязательны
+    // (план, фаза 2.5) — «И», а не «или». Рост rxTotal сам по себе поводом не
+    // является: счётчик двигает в том числе служебный TURN-трафик, и без WG-in-WG
+    // мы бы этим выключили watchdog совсем, а не сэкономили запрос.
+    //
+    // Порог намеренно жёсткий и намеренно не привязан к рекею (~120с,
+    // RekeyAfterTime): пропускаем зонд, только когда есть доказательство, что
+    // цепочка целиком работала секунды назад. Из-за этого гард срабатывает
+    // редко — так и задумано, не «чинить» поднятием порога. Проверка
+    // remoteTunnelUp тут несущая: у половины без единого хендшейка возраст
+    // равен нулю (см. parseIpcStats), и без неё она бы выглядела «свежей».
     private func probeSkippable() -> Bool {
         let rxGrowing = rxTotalBytes > lastRxTotalAtProbe
         lastRxTotalAtProbe = rxTotalBytes
-        guard rxGrowing else { return false }
-        guard ftunStarted else { return true }
+        guard rxGrowing, ftunStarted else { return false }
         return remoteTunnelUp && remoteTunnelHandshakeAgeSec < Int64(Self.probeInterval * 3)
     }
 }
