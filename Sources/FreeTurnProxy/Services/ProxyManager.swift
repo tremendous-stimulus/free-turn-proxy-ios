@@ -111,6 +111,15 @@ final class ProxyManager: ObservableObject {
     private let lostNotifID = "tunnel-lost"
     private let recoveredNotifID = "tunnel-recovered"
 
+    // Короткий обрыв пользователя беспокоить не должен: ступени 0–1 нередко
+    // закрывают эпизод за пару секунд, и пара пушей «Переподключаемся» →
+    // «Переподключились» на это — чистый шум. Поэтому «Переподключаемся»
+    // уезжает в отложенный work item, и пуши работают строго парой: не ушёл
+    // первый — не уходит и второй.
+    private static let reconnectingNotifDelay: TimeInterval = 10
+    private var reconnectingNotifWork: DispatchWorkItem?
+    private var reconnectingNotifPosted = false
+
     // Лестница восстановления (план, фаза 2.3): чем дороже действие, тем реже
     // до него доходит. Ступени 0–1 не пересоздают Go-сессию — не тратят
     // capcha/переавторизацию, поэтому эскалация к ним не страшна.
@@ -252,6 +261,7 @@ final class ProxyManager: ObservableObject {
         backoffTickTimer = nil
         retryBackoffSeconds = 0
         inRetryCycle = false
+        cancelPendingReconnectingNotification()
         ftunStarted = false
         chainHealth = ChainHealth()
         probeFailureStreak = 0
@@ -278,6 +288,7 @@ final class ProxyManager: ObservableObject {
         autoReconnectAttempt = 0
         everConnected = false
         inRetryCycle = false
+        cancelPendingReconnectingNotification()
         probeFailureStreak = 0
         lastRxTotalAtProbe = 0
         lastInterfaceIndex = 0
@@ -423,9 +434,7 @@ final class ProxyManager: ObservableObject {
             probeFailureStreak = 0
             CaptchaController.shared.resetPushSuppression()
             if inRetryCycle {
-                inRetryCycle = false
-                ErrorLogger.shared.appendAppLine(level: "INF", message: "туннель восстановлен")
-                postRecoveredNotification()
+                endRetryCycle(logMessage: "туннель восстановлен")
             }
             startLocalTunnelIfNeeded()
         }
@@ -473,11 +482,52 @@ final class ProxyManager: ObservableObject {
 
     // Пуш и WRN-строка — только на границе эпизода (план, фаза 2.4: шум
     // внутри цикла — на DBG). Общий вход для всех трёх триггеров реконнекта.
+    // WRN пишем сразу — лог должен видеть эпизод целиком, — а пуш ждёт
+    // reconnectingNotifDelay: короткие обрывы пользователю не показываем.
     private func beginRetryCycleIfNeeded(reason: String) {
         guard !inRetryCycle else { return }
         inRetryCycle = true
         ErrorLogger.shared.appendAppLine(level: "WRN", message: "туннель прервался: \(reason)")
-        postReconnectingNotification()
+        scheduleReconnectingNotification()
+    }
+
+    // Пользователь сам остановил/перезапустил туннель — отложенный пуш про
+    // обрыв стал ложью, снимаем вместе с парностью.
+    private func cancelPendingReconnectingNotification() {
+        reconnectingNotifWork?.cancel()
+        reconnectingNotifWork = nil
+        reconnectingNotifPosted = false
+    }
+
+    private func scheduleReconnectingNotification() {
+        reconnectingNotifWork?.cancel()
+        reconnectingNotifPosted = false
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isRunning, self.inRetryCycle else { return }
+            self.reconnectingNotifWork = nil
+            // shouldPostStatusPush() спрашиваем здесь, а не в момент обрыва:
+            // за эти секунды пользователь мог уйти с экрана туннеля (или
+            // вернуться на него), и значение на момент отправки честнее.
+            guard self.postReconnectingNotification() else { return }
+            self.reconnectingNotifPosted = true
+        }
+        reconnectingNotifWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconnectingNotifDelay, execute: work)
+    }
+
+    // Единственный выход из эпизода — и по push'у connected от Go, и по тихому
+    // восстановлению на дешёвых ступенях. «Переподключились» шлём только если
+    // «Переподключаемся» действительно ушло: иначе пользователь получил бы
+    // сообщение о починке того, о поломке чего его не уведомляли.
+    private func endRetryCycle(logMessage: String) {
+        inRetryCycle = false
+        reconnectingNotifWork?.cancel()
+        reconnectingNotifWork = nil
+        ErrorLogger.shared.appendAppLine(level: "INF", message: logMessage)
+        if reconnectingNotifPosted {
+            reconnectingNotifPosted = false
+            postRecoveredNotification()
+        }
     }
 
     // MARK: – Смена сети (план, фаза 2.1/2.2)
@@ -704,12 +754,10 @@ final class ProxyManager: ObservableObject {
     // восстановление локально и закрываем эпизод тем же путём, что и
     // handleState(connected): сброс попыток, снятие пуша «Переподключаемся».
     private func recoverSilently() {
-        inRetryCycle = false
         autoReconnectAttempt = 0
         probeFailureStreak = 0
         setState(.connected)
-        ErrorLogger.shared.appendAppLine(level: "INF", message: "туннель восстановлен без пересоздания сессии")
-        postRecoveredNotification()
+        endRetryCycle(logMessage: "туннель восстановлен без пересоздания сессии")
     }
 
     // Пуши шлём только когда пользователь не смотрит вкладку «Туннель» в
@@ -723,14 +771,17 @@ final class ProxyManager: ObservableObject {
     // «ошибка») потому что снаружи это выглядит как восстановимая пауза, а не
     // фейл — туннель сам поднимется. Отдельная функция от
     // postInitialConnectFailureNotification, чтобы тексты не путались.
-    private func postReconnectingNotification() {
-        guard shouldPostStatusPush() else { return }
+    // Возвращает, ушёл ли пуш: от этого зависит, слать ли парный
+    // «Переподключились» (см. endRetryCycle).
+    private func postReconnectingNotification() -> Bool {
+        guard shouldPostStatusPush() else { return false }
         let content = UNMutableNotificationContent()
         content.title = "Переподключаемся"
         content.body = "Восстанавливаем туннель"
         content.sound = .default
         let req = UNNotificationRequest(identifier: lostNotifID, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
+        return true
     }
 
     // Пуш на путь idle→connecting→error (ни разу не подключились). Здесь слово
