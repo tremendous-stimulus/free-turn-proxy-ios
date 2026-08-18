@@ -18,6 +18,12 @@ import Mobile
 // Один класс на оба биндинга: у mobile.Protector и ftun.Protector совпадает
 // селектор, поэтому и сокеты ядра, и сокеты обходного netstack'а (фаза 5.2)
 // защищает одна и та же реализация.
+//
+// Собственного NWPathMonitor больше нет (план, фаза 2.1) — единственный
+// монитор на приложение теперь живёт в NetworkPath, ProxyManager подписан на
+// него же ради немедленного реконнекта при смене интерфейса. Второй монитор
+// означал бы, что после LTE↔Wi-Fi два независимых колбэка обновляют индекс с
+// разным лагом.
 final class SocketProtector: NSObject, MobileProtectorProtocol, FtunProtectorProtocol {
     static let shared = SocketProtector()
 
@@ -26,39 +32,14 @@ final class SocketProtector: NSObject, MobileProtectorProtocol, FtunProtectorPro
     private static let ipBoundIf: Int32 = 25
     private static let ipv6BoundIf: Int32 = 125
 
-    // NWPathMonitor одноразовый: после cancel() его нельзя запустить снова,
-    // поэтому на каждый activate заводим новый — иначе после первого же
-    // stop()/start() туннеля индекс перестал бы обновляться.
-    private var monitor: NWPathMonitor?
-    private let queue = DispatchQueue(label: "SocketProtector.path")
-    private let lock = NSLock()
-    private var interfaceIndex: UInt32 = 0
-
     private override init() { super.init() }
 
-    // Индекс интерфейса обязан быть свежим: protect() зовётся на каждый новый
-    // сокет, и после перехода LTE↔Wi-Fi устаревшее значение привязало бы сокет
-    // к мёртвому интерфейсу. Поэтому не разовое чтение, а подписка на путь.
     func activate() {
-        lock.lock()
-        guard monitor == nil else { lock.unlock(); return }
-        let fresh = NWPathMonitor()
-        monitor = fresh
-        lock.unlock()
-
-        fresh.pathUpdateHandler = { [weak self] path in
-            self?.updateIndex(from: path)
-        }
-        fresh.start(queue: queue)
+        NetworkPath.shared.activate()
     }
 
     func deactivate() {
-        lock.lock()
-        let stale = monitor
-        monitor = nil
-        interfaceIndex = 0
-        lock.unlock()
-        stale?.cancel()
+        NetworkPath.shared.deactivate()
     }
 
     // MARK: - MobileProtectorProtocol
@@ -66,9 +47,7 @@ final class SocketProtector: NSObject, MobileProtectorProtocol, FtunProtectorPro
     // Возвращаем true и когда привязывать не к чему: false заставил бы ядро
     // считать сокет непригодным, хотя без VPN он прекрасно работает.
     func protect(_ fd: Int) -> Bool {
-        lock.lock()
-        var index = interfaceIndex
-        lock.unlock()
+        var index = NetworkPath.shared.currentSnapshot.interfaceIndex
         if index == 0 {
             index = Self.fallbackIndex()
         }
@@ -83,13 +62,6 @@ final class SocketProtector: NSObject, MobileProtectorProtocol, FtunProtectorPro
     }
 
     // MARK: - Выбор интерфейса
-
-    private func updateIndex(from path: Network.NWPath) {
-        let index = Self.physicalIndex(in: path)
-        lock.lock()
-        interfaceIndex = index
-        lock.unlock()
-    }
 
     // availableInterfaces упорядочен по предпочтительности, поэтому берём
     // первый физический. Тип .other — это как раз utun самого VPN, его

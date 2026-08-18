@@ -27,6 +27,11 @@ final class ProxyManager: ObservableObject {
     // остаётся false/0, UI показывает только один статус, как раньше.
     @Published var localTunnelUp = false
     @Published var localTunnelHandshakeAgeSec: Int64 = 0
+    // Внешняя половина WG-in-WG (план, фаза 2.6) — вход для зонда (2.5) и
+    // для ступени 0 лестницы восстановления (nudge), которая чинит именно
+    // эту половину.
+    @Published var remoteTunnelUp = false
+    @Published var remoteTunnelHandshakeAgeSec: Int64 = 0
 
     private var config: FreeTurnConfig?
     private var statsTimer: Timer?
@@ -38,6 +43,7 @@ final class ProxyManager: ObservableObject {
     private let ftun: FtunAPI
     private let localWGConfig: LocalWGConfigStoring
     private let externalWGConfig: ExternalWGConfigStoring
+    private let networkPath: NetworkPathProviding
 
     private static let probeInterval: TimeInterval = 5
     private static let probeURL = URL(string: "http://captive.apple.com")!
@@ -62,18 +68,17 @@ final class ProxyManager: ObservableObject {
         return v.isEmpty ? AppSettings.defaultListen : v
     }
 
-    // Реконнект-цикл стартует из двух мест, оба идут через enterRetryCycle():
+    // Реконнект-цикл стартует из трёх мест, все идут через enterRetryCycle()
+    // либо напрямую через triggerAutoReconnect(immediate:):
     //   • Go выдал error из connected (push через EventSink.onState);
-    //   • healthcheck-зонд (captive.apple.com) провалился.
-    // Сам реконнект — один MobileRestart, без промежуточного stop+start:
-    // ядро атомарно подменяет текущую сессию, поэтому нет окна, в котором
-    // push мог бы прислать «случайный» idle.
-    //
-    // Третьим триггером была смена сети (NetworkMonitor) — убран. Включение
-    // самого AmneziaWG тоже выглядит как смена пути, поэтому реконнект бил по
-    // рукам ровно в тот момент, когда всё только поднималось. Реальный обрыв
-    // при переходе LTE↔Wi-Fi никуда не делся, но ловится зондом за ~5с — по
-    // факту поломки, а не по событию, которое поломкой быть не обязано.
+    //   • healthcheck-зонд (captive.apple.com) провалился дважды подряд;
+    //   • сменился физический интерфейс/появился путь после unsatisfied
+    //     (handleNetworkPathChange, план фаза 2.2).
+    // Раньше третий триггер был выпилен из-за ложных срабатываний на
+    // включение AmneziaWG — оказалось, что SocketProtector.physicalIndex
+    // намеренно пропускает utun (см. её комментарий), поэтому включение VPN
+    // индекс физического интерфейса не меняет и старый повод для выпила не
+    // действует.
     private let protector = SocketProtector.shared
 
     // Инжектируем, чтобы тесты не зависели от содержимого UserDefaults и файлов
@@ -84,6 +89,12 @@ final class ProxyManager: ObservableObject {
     // BypassRoutes.excludes, см. startLocalTunnelIfNeeded.
     private let bypassRoutes: (SplitTunnelConfig) -> [String]
 
+    // Один и тот же зонд достижимости используют и обычный 5с-таймер
+    // (performProbe), и подтверждение дешёвых ступеней лестницы
+    // (confirmCheapStepOutcome) — вынесено в замыкание, чтобы тесты не
+    // зависели от реальной сети (по образцу bypassRoutes выше).
+    private let reachabilityProbe: (@escaping (Bool) -> Void) -> Void
+
     // Срабатывает только если в течение сессии хотя бы раз дошли до connected —
     // connecting→error не ретраит (это первичный провал коннекта, не реконнект).
     private var everConnected = false
@@ -92,19 +103,53 @@ final class ProxyManager: ObservableObject {
     private var backoffTickTimer: Timer?
     // Стартует на первом входе в retry-цикл из connected, гасится:
     //   • на успешном переподключении (там же шлём «Переподключились»);
-    //   • на stop()/start();
-    //   • когда сами сдались (если когда-нибудь добавим limit).
+    //   • на тихом восстановлении после ступеней 0–1 (recoverSilently);
+    //   • на stop()/start().
+    // Никогда не гасится сдачей — план, фаза 2.4: бюджет попыток убран,
+    // бекофф упирается в потолок 15с и продолжается бесконечно.
     private var inRetryCycle = false
     private let lostNotifID = "tunnel-lost"
     private let recoveredNotifID = "tunnel-recovered"
-    private let gaveUpNotifID = "tunnel-gave-up"
-    private static let maxAutoReconnectAttempts = 5
+
+    // Лестница восстановления (план, фаза 2.3): чем дороже действие, тем реже
+    // до него доходит. Ступени 0–1 не пересоздают Go-сессию — не тратят
+    // capcha/переавторизацию, поэтому эскалация к ним не страшна.
+    private enum RecoveryStep: String {
+        case nudge, wake, restart, fullRestart
+    }
+
+    private func recoveryStep(forAttempt attempt: Int) -> RecoveryStep {
+        switch min(attempt, 3) {
+        case 0: return .nudge
+        case 1: return .wake
+        case 2: return .restart
+        default: return .fullRestart
+        }
+    }
+
+    // Зонд (2.5): не одиночный провал, а два подряд — таймаут ~4.5с на
+    // плохом LTE иначе даёт ложняки на каждый пятый тик.
+    private var probeFailureStreak = 0
+    private var lastRxTotalAtProbe: Int64 = 0
+
+    // Единственный источник смены физического интерфейса — подписка на
+    // NetworkPath (план, фаза 2.1/2.2). 0 — путь ещё не отдал первый снимок.
+    private var lastInterfaceIndex: UInt32 = 0
+    private var networkPathObserverID: UUID?
 
     // Сколько секунд осталось до следующей попытки реконнекта. Обновляется раз
     // в секунду, чтобы UI мог показывать «Переподключаемся через X с».
     @Published var retryBackoffSeconds: Int = 0
 
     var serverAddress: String { config?.config.peer ?? "" }
+
+    private static func liveReachabilityProbe(_ completion: @escaping (Bool) -> Void) {
+        var req = URLRequest(url: probeURL)
+        req.timeoutInterval = probeInterval - 0.5
+        URLSession.shared.dataTask(with: req) { _, _, error in
+            DispatchQueue.main.async { completion(error == nil) }
+        }.resume()
+    }
 
     private init() {
         self.mobile = LiveMobileAPI()
@@ -113,14 +158,18 @@ final class ProxyManager: ObservableObject {
         self.externalWGConfig = KeychainExternalWGConfigStore()
         self.bypassRoutes = { SplitTunnelResolver.bypassCIDRs(for: $0) }
         self.ftunQueue = DispatchQueue(label: "com.freeturn.proxy.ftun")
+        self.networkPath = NetworkPath.shared
+        self.reachabilityProbe = Self.liveReachabilityProbe
     }
 
-    // Инжектируемый init — для тестов с MockMobileAPI/MockFtunAPI.
+    // Инжектируемый init — для тестов с MockMobileAPI/MockFtunAPI/MockNetworkPath.
     init(mobile: MobileAPI, ftun: FtunAPI = LiveFtunAPI(),
          localWGConfig: LocalWGConfigStoring = KeychainLocalWGConfigStore(),
          externalWGConfig: ExternalWGConfigStoring = KeychainExternalWGConfigStore(),
          bypassRoutes: @escaping (SplitTunnelConfig) -> [String] = { _ in [] },
-         ftunQueue: DispatchQueue = DispatchQueue(label: "com.freeturn.proxy.ftun")) {
+         ftunQueue: DispatchQueue = DispatchQueue(label: "com.freeturn.proxy.ftun"),
+         networkPath: NetworkPathProviding = NetworkPath.shared,
+         reachabilityProbe: @escaping (@escaping (Bool) -> Void) -> Void = { $0(true) }) {
         self.mobile = mobile
         self.ftun = ftun
         self.localWGConfig = localWGConfig
@@ -128,6 +177,11 @@ final class ProxyManager: ObservableObject {
         self.bypassRoutes = bypassRoutes
         // Тест передаёт свою очередь, чтобы дождаться асинхронных вызовов ftun.
         self.ftunQueue = ftunQueue
+        self.networkPath = networkPath
+        // Дефолт для тестов — «всегда достижимо»: без него любой авто-ретрай
+        // бил бы в реальную сеть. Тесты, которым нужен провал, подставляют
+        // свой замыкание.
+        self.reachabilityProbe = reachabilityProbe
     }
 
     func loadConfig(_ config: FreeTurnConfig, fileName: String) {
@@ -155,6 +209,12 @@ final class ProxyManager: ObservableObject {
         retryBackoffSeconds = 0
         inRetryCycle = false
         ftunStarted = false
+        probeFailureStreak = 0
+        lastRxTotalAtProbe = 0
+        lastInterfaceIndex = networkPath.currentSnapshot.interfaceIndex
+        networkPathObserverID = networkPath.addObserver { [weak self] snapshot in
+            self?.handleNetworkPathChange(snapshot)
+        }
         CaptchaController.shared.resetPushSuppression()
         let persistLogs = UserDefaults.standard.object(forKey: DefaultsKeys.persistLogs) as? Bool ?? false
         if !persistLogs {
@@ -173,6 +233,14 @@ final class ProxyManager: ObservableObject {
         autoReconnectAttempt = 0
         everConnected = false
         inRetryCycle = false
+        probeFailureStreak = 0
+        lastRxTotalAtProbe = 0
+        lastInterfaceIndex = 0
+        if let id = networkPathObserverID {
+            networkPath.removeObserver(id)
+            networkPathObserverID = nil
+        }
+        networkPath.deactivate()
         CaptchaController.shared.resetPushSuppression()
         CaptchaController.shared.hide()
         UNUserNotificationCenter.current()
@@ -184,6 +252,8 @@ final class ProxyManager: ObservableObject {
         }
         localTunnelUp = false
         localTunnelHandshakeAgeSec = 0
+        remoteTunnelUp = false
+        remoteTunnelHandshakeAgeSec = 0
         mobile.stop()
         mobile.setProtect(nil)
         protector.deactivate()
@@ -304,9 +374,11 @@ final class ProxyManager: ObservableObject {
         if st == .connected {
             everConnected = true
             autoReconnectAttempt = 0
+            probeFailureStreak = 0
             CaptchaController.shared.resetPushSuppression()
             if inRetryCycle {
                 inRetryCycle = false
+                ErrorLogger.shared.appendAppLine(level: "INF", message: "туннель восстановлен")
                 postRecoveredNotification()
             }
             startLocalTunnelIfNeeded()
@@ -342,46 +414,132 @@ final class ProxyManager: ObservableObject {
     // MARK: – Унифицированный вход в retry-цикл
 
     // Единая точка входа для всех источников «связь с туннелем потеряна»:
-    // ошибка из Go (connected→error), провал healthcheck-зонда, смена сети.
-    // Гард на everConnected: до первого успешного коннекта реконнект не делаем —
-    // там работает свой 15с-watchdog Go, и пуш «Переподключаемся» был бы ложью.
+    // ошибка из Go (connected→error), провал healthcheck-зонда. Смена сети —
+    // отдельные входы (handleInterfaceChanged/leaveWaitingNetwork), они не
+    // тратят бекофф. Гард на everConnected: до первого успешного коннекта
+    // реконнект не делаем — там работает свой watchdog Go, и пуш
+    // «Переподключаемся» был бы ложью.
     private func enterRetryCycle() {
         guard isRunning, config != nil, everConnected else { return }
-        if !inRetryCycle {
-            inRetryCycle = true
-            postReconnectingNotification()
-        }
+        beginRetryCycleIfNeeded(reason: "потеряна связь")
         triggerAutoReconnect()
+    }
+
+    // Пуш и WRN-строка — только на границе эпизода (план, фаза 2.4: шум
+    // внутри цикла — на DBG). Общий вход для всех трёх триггеров реконнекта.
+    private func beginRetryCycleIfNeeded(reason: String) {
+        guard !inRetryCycle else { return }
+        inRetryCycle = true
+        ErrorLogger.shared.appendAppLine(level: "WRN", message: "туннель прервался: \(reason)")
+        postReconnectingNotification()
+    }
+
+    // MARK: – Смена сети (план, фаза 2.1/2.2)
+
+    // Единственный монитор пути на приложение (NetworkPath) — колбэк
+    // приходит на main (см. NetworkPath.handle). isRunning гард: наблюдатель
+    // снимается в stop(), но путь мог обновиться в узком окне между
+    // событиями до отписки.
+    private func handleNetworkPathChange(_ snapshot: NetworkPathSnapshot) {
+        guard isRunning else { return }
+        let previousIndex = lastInterfaceIndex
+        lastInterfaceIndex = snapshot.interfaceIndex
+
+        if !snapshot.isSatisfied {
+            enterWaitingNetwork()
+            return
+        }
+        if state == .waitingNetwork {
+            leaveWaitingNetwork()
+            return
+        }
+        // Оба индекса ненулевые и различаются — сокеты ядра (IP_BOUND_IF)
+        // привязаны к интерфейсу, которого больше нет, и мертвы навсегда
+        // (план, «Разбор», причина 2). appearance из 0 — это первый снимок
+        // после activate(), а не смена, её не считаем.
+        if previousIndex != 0, snapshot.interfaceIndex != 0, previousIndex != snapshot.interfaceIndex {
+            handleInterfaceChanged()
+        }
+    }
+
+    // Путь unsatisfied во время активной сессии: не жжём попытки реконнекта
+    // на отсутствие сети как таковое — ждём его появления молча.
+    private func enterWaitingNetwork() {
+        guard isRunning, config != nil, everConnected, state != .waitingNetwork else { return }
+        autoReconnectWork?.cancel()
+        autoReconnectWork = nil
+        backoffTickTimer?.invalidate()
+        backoffTickTimer = nil
+        retryBackoffSeconds = 0
+        state = .waitingNetwork
+        connectedStreams = 0
+        ErrorLogger.shared.appendAppLine(level: "DBG", message: "путь сети недоступен, ждём восстановления")
+    }
+
+    // Путь снова satisfied после waitingNetwork — реконнект сразу, без
+    // бекоффа: обрыв уже случился раньше, ждать тут нечего.
+    private func leaveWaitingNetwork() {
+        guard isRunning, config != nil, everConnected else { return }
+        ErrorLogger.shared.appendAppLine(level: "DBG", message: "путь сети восстановлен")
+        beginRetryCycleIfNeeded(reason: "путь сети восстановлен")
+        triggerAutoReconnect(immediate: true)
+    }
+
+    // Физический интерфейс сменился под живой сессией — сокеты ядра мертвы
+    // навсегда (IP_BOUND_IF на старый индекс), ждать зонда ~5с незачем.
+    // Ступени 0–1 тут не помогут (они не трогают protect-привязку сокетов),
+    // поэтому сразу поднимаем пол лестницы до restartMobile.
+    private func handleInterfaceChanged() {
+        guard isRunning, config != nil, everConnected else { return }
+        ErrorLogger.shared.appendAppLine(level: "DBG", message: "сменился физический интерфейс сети")
+        autoReconnectAttempt = max(autoReconnectAttempt, 2)
+        beginRetryCycleIfNeeded(reason: "сменился физический интерфейс сети")
+        triggerAutoReconnect(immediate: true)
     }
 
     // MARK: – Авто-переподключение при обрыве туннеля
 
     // 1, 2, 4, 8, 15, 15, …
-    private func autoReconnectDelay() -> TimeInterval {
-        let capped = min(autoReconnectAttempt, 4)
+    private func autoReconnectDelay(forAttempt attempt: Int) -> TimeInterval {
+        let capped = min(attempt, 4)
         let v = Foundation.pow(2.0, Double(capped))
         return min(v, 15.0)
     }
 
-    private func triggerAutoReconnect() {
+    // Никогда не сдаётся (план, фаза 2.4) — бекофф упирается в потолок 15с и
+    // продолжается, пока сессия жива. immediate=true пропускает ожидание
+    // (смена сети — обрыв уже случился, ждать нечего).
+    private func triggerAutoReconnect(immediate: Bool = false) {
         guard isRunning, config != nil else { return }
-        if autoReconnectAttempt >= Self.maxAutoReconnectAttempts {
-            giveUpReconnecting()
+        guard networkPath.currentSnapshot.isSatisfied else {
+            enterWaitingNetwork()
             return
         }
-        state = .retryBackoff
         connectedStreams = 0
-        let delay = autoReconnectDelay()
-        let n = autoReconnectAttempt + 1
+        let stepAttempt = autoReconnectAttempt
+        autoReconnectAttempt = stepAttempt + 1
+        let step = recoveryStep(forAttempt: stepAttempt)
+
+        if immediate {
+            backoffTickTimer?.invalidate()
+            backoffTickTimer = nil
+            retryBackoffSeconds = 0
+            autoReconnectWork?.cancel()
+            autoReconnectWork = nil
+            performRecoveryStep(step)
+            return
+        }
+
+        state = .retryBackoff
+        let delay = autoReconnectDelay(forAttempt: stepAttempt)
         ErrorLogger.shared.appendAppLine(
-            level: "WRN",
-            message: "соединение прервано, переподключение через \(Int(delay))с (попытка \(n))"
+            level: "DBG",
+            message: "соединение прервано, переподключение через \(Int(delay))с (ступень \(step.rawValue))"
         )
-        autoReconnectAttempt = n
         retryBackoffSeconds = Int(delay)
         startBackoffTick()
         autoReconnectWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.performAutoReconnect() }
+        let work = DispatchWorkItem { [weak self] in self?.performRecoveryStep(step) }
         autoReconnectWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
@@ -394,31 +552,94 @@ final class ProxyManager: ObservableObject {
         }
     }
 
-    private func performAutoReconnect() {
+    // Ступень 3 требует полного перезапуска ftun-очереди, ступени 2–3 идут
+    // через restartMobile — Go сам пришлёт onState и подтвердит успех.
+    // Ступени 0–1 ничего не пересоздают, поэтому подтверждаем их отдельно
+    // (confirmCheapStepOutcome) — Go может неделями не прислать новый push,
+    // если сам считает себя в порядке, а сломана только наша сторона.
+    private func performRecoveryStep(_ step: RecoveryStep) {
         guard isRunning, let config else { return }
         backoffTickTimer?.invalidate()
         backoffTickTimer = nil
         retryBackoffSeconds = 0
-        state = .connecting
-        do {
-            try restartMobile(config)
-        } catch {
-            // Рестарт сам бросил исключение — считаем как очередной фейл и
-            // ждём следующий бекофф.
-            triggerAutoReconnect()
+
+        switch step {
+        case .nudge:
+            guard ftunStarted else {
+                // Без WG-in-WG nudge'ить нечего — сразу пробуем wake.
+                performRecoveryStep(.wake)
+                return
+            }
+            state = .connecting
+            ErrorLogger.shared.appendAppLine(level: "DBG", message: "ступень 0: nudge WG-in-WG")
+            let ftun = self.ftun
+            ftunQueue.async { ftun.nudge() }
+            scheduleCheapStepFollowUp()
+        case .wake:
+            state = .connecting
+            ErrorLogger.shared.appendAppLine(level: "DBG", message: "ступень 1: mobile.wake()")
+            mobile.wake()
+            scheduleCheapStepFollowUp()
+        case .restart:
+            state = .connecting
+            ErrorLogger.shared.appendAppLine(level: "DBG", message: "ступень 2: restartMobile")
+            do {
+                try restartMobile(config)
+            } catch {
+                triggerAutoReconnect()
+            }
+        case .fullRestart:
+            state = .connecting
+            ErrorLogger.shared.appendAppLine(level: "DBG", message: "ступень 3: полный перезапуск ftun + restartMobile")
+            if ftunStarted {
+                ftunStarted = false
+                let ftun = self.ftun
+                ftunQueue.async { [weak self] in
+                    ftun.stop()
+                    DispatchQueue.main.async { self?.startLocalTunnelIfNeeded() }
+                }
+            }
+            do {
+                try restartMobile(config)
+            } catch {
+                triggerAutoReconnect()
+            }
         }
     }
 
-    // Бюджет попыток исчерпан — гасим туннель вместо бесконечного бекоффа.
-    private func giveUpReconnecting() {
-        ErrorLogger.shared.appendAppLine(
-            level: "ERR",
-            message: "переподключение не удалось после \(Self.maxAutoReconnectAttempts) попыток, останавливаемся"
-        )
-        stop()
-        state = .error
-        errorMessage = "Не удалось переподключиться после \(Self.maxAutoReconnectAttempts) попыток"
-        postGaveUpNotification()
+    private static let cheapStepFollowUpDelay: TimeInterval = 3
+
+    // Ступени 0–1 не трогают Go-сессию — Go может и не прислать новый push,
+    // если сам считает себя в порядке. Перепроверяем зондом сами и либо
+    // тихо закрываем эпизод, либо эскалируем на следующую ступень.
+    private func scheduleCheapStepFollowUp() {
+        let work = DispatchWorkItem { [weak self] in self?.confirmCheapStepOutcome() }
+        autoReconnectWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cheapStepFollowUpDelay, execute: work)
+    }
+
+    private func confirmCheapStepOutcome() {
+        guard isRunning, inRetryCycle else { return }
+        reachabilityProbe { [weak self] ok in
+            guard let self, self.isRunning, self.inRetryCycle else { return }
+            if ok {
+                self.recoverSilently()
+            } else {
+                self.triggerAutoReconnect()
+            }
+        }
+    }
+
+    // Ступени 0–1 не дают Go повода прислать connected сам — подтверждаем
+    // восстановление локально и закрываем эпизод тем же путём, что и
+    // handleState(connected): сброс попыток, снятие пуша «Переподключаемся».
+    private func recoverSilently() {
+        inRetryCycle = false
+        autoReconnectAttempt = 0
+        probeFailureStreak = 0
+        state = .connected
+        ErrorLogger.shared.appendAppLine(level: "INF", message: "туннель восстановлен без пересоздания сессии")
+        postRecoveredNotification()
     }
 
     // Пуши шлём только когда пользователь не смотрит вкладку «Туннель» в
@@ -466,16 +687,6 @@ final class ProxyManager: ObservableObject {
         UNUserNotificationCenter.current().add(req)
     }
 
-    private func postGaveUpNotification() {
-        guard shouldPostStatusPush() else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "Подключение разорвано"
-        content.body = "Не удалось переподключиться после \(Self.maxAutoReconnectAttempts) попыток"
-        content.sound = .default
-        let req = UNNotificationRequest(identifier: gaveUpNotifID, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req)
-    }
-
     // MARK: – Статистика трафика (лёгкий поллинг)
 
     private func startActiveTimers() {
@@ -499,6 +710,8 @@ final class ProxyManager: ObservableObject {
                     self.ftunStatsInFlight = false
                     self.localTunnelUp = ftunSnap?.localUp ?? false
                     self.localTunnelHandshakeAgeSec = ftunSnap?.localHandshakeAgeSec ?? 0
+                    self.remoteTunnelUp = ftunSnap?.remoteUp ?? false
+                    self.remoteTunnelHandshakeAgeSec = ftunSnap?.remoteHandshakeAgeSec ?? 0
                 }
             }
         }
@@ -526,18 +739,41 @@ final class ProxyManager: ObservableObject {
 
     private func performProbe() {
         guard state == .connected, isRunning else { return }
-        var req = URLRequest(url: Self.probeURL)
-        req.timeoutInterval = Self.probeInterval - 0.5
-        URLSession.shared.dataTask(with: req) { [weak self] _, _, error in
-            DispatchQueue.main.async {
-                guard let self, self.state == .connected, self.isRunning else { return }
-                if let error {
-                    ErrorLogger.shared.appendAppLine(level: "WRN",
-                        message: "tunnel probe failed: \(error.localizedDescription)")
-                    self.enterRetryCycle()
-                }
+        // Отсутствие сети как таковое — не поломка туннеля, это отдельный
+        // путь через enterWaitingNetwork (handleNetworkPathChange); зонд тут
+        // ничего нового не скажет и только потратил бы попытку.
+        guard networkPath.currentSnapshot.isSatisfied else { return }
+        if probeSkippable() {
+            probeFailureStreak = 0
+            return
+        }
+        reachabilityProbe { [weak self] ok in
+            guard let self, self.state == .connected, self.isRunning else { return }
+            if ok {
+                self.probeFailureStreak = 0
+                return
             }
-        }.resume()
+            self.probeFailureStreak += 1
+            ErrorLogger.shared.appendAppLine(level: "DBG",
+                message: "tunnel probe failed (\(self.probeFailureStreak)/2)")
+            // Один провал на плохом LTE — норма (таймаут ~4.5с). Реагируем
+            // только на два подряд.
+            if self.probeFailureStreak >= 2 {
+                self.probeFailureStreak = 0
+                self.enterRetryCycle()
+            }
+        }
+    }
+
+    // Дешёвые локальные индикаторы уже говорят «живо» — растёт rxTotal ядра,
+    // и (если WG-in-WG поднят) внешняя половина ftun отвечала на хендшейк
+    // недавно. Экономим сетевой запрос там, где и так видно, что туннель жив.
+    private func probeSkippable() -> Bool {
+        let rxGrowing = rxTotalBytes > lastRxTotalAtProbe
+        lastRxTotalAtProbe = rxTotalBytes
+        guard rxGrowing else { return false }
+        guard ftunStarted else { return true }
+        return remoteTunnelUp && remoteTunnelHandshakeAgeSec < Int64(Self.probeInterval * 3)
     }
 }
 
