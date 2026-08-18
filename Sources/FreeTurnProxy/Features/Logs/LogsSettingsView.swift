@@ -3,6 +3,7 @@ import SwiftUI
 struct LogsSettingsView: View {
     @AppStorage(DefaultsKeys.telemetryEnabled) private var telemetryEnabled = true
     @AppStorage(DefaultsKeys.persistLogs) private var persistLogs = false
+    @AppStorage(DefaultsKeys.logsMinLevel) private var logsMinLevel = ErrorLogger.LogLevel.wrn.rawValue
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -27,6 +28,18 @@ struct LogsSettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+
+                Section {
+                    Picker("Уровень логов", selection: $logsMinLevel) {
+                        ForEach(ErrorLogger.LogLevel.allCases) { level in
+                            Text(level.title).tag(level.rawValue)
+                        }
+                    }
+                } footer: {
+                    // Фильтр влияет только на то, что показывается на экране —
+                    // в телеметрию по-прежнему уходят все уровни.
+                    Text("Что показывать на экране логов. На отправляемую диагностику не влияет.")
                 }
             }
             .navigationTitle("Настройки логов")

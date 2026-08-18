@@ -26,6 +26,32 @@ final class ErrorLogger {
         let message: String  // сообщение без префикса времени и уровня
     }
 
+    // Порог отображения в LogsView — фильтр чисто UI-шный, на shipBatch()
+    // (отправку в телеметрию) не влияет: там уходит всё, независимо от того,
+    // что выбрано в настройках экрана логов.
+    enum LogLevel: String, CaseIterable, Identifiable {
+        case dbg = "DBG", inf = "INF", wrn = "WRN", err = "ERR"
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .dbg: return "Все"
+            case .inf: return "Инфо и выше"
+            case .wrn: return "Предупреждения и выше"
+            case .err: return "Только ошибки"
+            }
+        }
+
+        fileprivate var order: Int {
+            switch self {
+            case .dbg: return 0
+            case .inf: return 1
+            case .wrn: return 2
+            case .err: return 3
+            }
+        }
+    }
+
     // MARK: – Unified buffer (Main thread)
 
     private(set) var entries: [LogEntry] = []
@@ -37,6 +63,15 @@ final class ErrorLogger {
     static let maxEntries = 10_000
 
     var displayLogs: String { entries.map(\.display).joined(separator: "\n") }
+
+    // Неизвестный уровень (в буфере такого пока не бывает — level всегда из
+    // levelMap/appendAppLine — но на случай будущего расширения) не режем.
+    func displayLogs(minLevel: LogLevel) -> String {
+        entries
+            .filter { LogLevel(rawValue: $0.level).map { $0.order >= minLevel.order } ?? true }
+            .map(\.display)
+            .joined(separator: "\n")
+    }
 
     // MARK: – Ingestion
 

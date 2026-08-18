@@ -10,6 +10,12 @@ final class LogsViewModel: ObservableObject {
         self.mobile = mobile
     }
 
+    // Порог читаем каждый refresh — экран настроек живёт в отдельном шите
+    // (LogsSettingsView) и меняет тот же ключ UserDefaults напрямую.
+    private var minLevel: ErrorLogger.LogLevel {
+        UserDefaults.standard.string(forKey: DefaultsKeys.logsMinLevel).flatMap(ErrorLogger.LogLevel.init) ?? .wrn
+    }
+
     func start() {
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -38,7 +44,7 @@ final class LogsViewModel: ObservableObject {
     }
 
     private func refresh() {
-        let new = ErrorLogger.shared.displayLogs
+        let new = ErrorLogger.shared.displayLogs(minLevel: minLevel)
         if new != logs { logs = new }
     }
 }
