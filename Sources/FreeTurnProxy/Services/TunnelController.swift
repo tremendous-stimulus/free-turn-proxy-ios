@@ -13,7 +13,7 @@ enum TunnelController {
 
         var errorDescription: String? {
             switch self {
-            case .noSelectedConfig: return "Не выбрана конфигурация"
+            case .noSelectedConfig: return "Не выбран профиль"
             case .noLink:           return "Не задана ссылка на VK-звонок"
             case .timedOut:         return "Не удалось дождаться подключения"
             case .connectFailed(let m): return m

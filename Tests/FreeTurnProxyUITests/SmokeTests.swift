@@ -21,10 +21,9 @@ final class SmokeTests: XCTestCase {
 
     // MARK: – Навигация
 
-    func test_allFourTabsExist() {
+    func test_allTabsExist() {
         let bar = app.tabBars.firstMatch
-        XCTAssertTrue(bar.buttons["Туннель"].exists)
-        XCTAssertTrue(bar.buttons["Конфиг VPN"].exists)
+        XCTAssertTrue(bar.buttons["Профили"].exists)
         XCTAssertTrue(bar.buttons["Логи"].exists)
         XCTAssertTrue(bar.buttons["Помощь"].exists)
     }
@@ -37,14 +36,14 @@ final class SmokeTests: XCTestCase {
     // MARK: – Туннель: без конфигурации
 
     func test_noConfig_connectButtonAbsent() {
-        // Кнопка «Подключиться» рендерится только при наличии выбранной конфигурации.
+        // Кнопка «Подключиться» рендерится только при наличии выбранного профиля.
         XCTAssertFalse(app.buttons["Подключиться"].exists)
     }
 
     // MARK: – Туннель: меню «+»
 
     func test_addMenu_showsExpectedItems() {
-        let addButton = app.buttons["Добавить конфигурацию"]
+        let addButton = app.buttons["Добавить профиль"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 3))
         addButton.tap()
         XCTAssertTrue(app.buttons["Настроить вручную"].waitForExistence(timeout: 2))

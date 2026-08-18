@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Сканер QR под freeturn://-ссылки — отдельный от сканера WG-конфига на
-// вкладке «Конфиг VPN» (тот принимает только [Interface]/[Peer]).
+// экране деталей туннеля (тот принимает только [Interface]/[Peer]).
 struct FreeturnLinkScanSheet: View {
     let onImport: (SavedConfig) -> Void
 

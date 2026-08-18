@@ -6,18 +6,7 @@ struct LogsView: View {
     @State private var showSettings = false
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                Text(vm.logs.isEmpty ? "Логи появятся после подключения" : vm.logs)
-                    .font(.system(.caption2, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .id("bottom")
-            }
-            .onChange(of: vm.logs) { _ in
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-        }
+        SelectableLogText(text: vm.logs.isEmpty ? "Логи появятся после подключения" : vm.logs)
         .navigationTitle("Логи")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

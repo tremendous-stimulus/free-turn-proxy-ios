@@ -4,7 +4,7 @@ import AppIntents
 @available(iOS 16.0, *)
 struct ConnectTunnelIntent: AppIntent {
     static var title: LocalizedStringResource = "Подключиться к туннелю"
-    static var description = IntentDescription("Поднимает прокси для выбранной конфигурации и ждёт подключения.")
+    static var description = IntentDescription("Поднимает прокси для выбранного профиля и ждёт подключения.")
     // Пытаемся работать в фоне; если iOS не даст — выполнится при открытом приложении.
     static var openAppWhenRun = false
 

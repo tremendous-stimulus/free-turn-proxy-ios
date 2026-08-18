@@ -5,7 +5,17 @@ import SwiftUI
 struct ConfigEditorView: View {
     @Environment(\.dismiss) private var dismiss
     let isEditing: Bool
+    // true — форма встроена прямо в раздел «Туннель» экрана деталей
+    // конфигурации: без своего NavigationStack/тулбара, изменения полей
+    // коммитятся в onSave сразу по мере набора, отдельной кнопки «Сохранить»
+    // нет.
+    let embedded: Bool
     let onSave: (SavedConfig) -> Void
+    // Валидность формы в embedded-режиме. Коммитим мы безусловно (иначе в
+    // черновике оставалось бы прежнее валидное значение и подтверждение
+    // сохранило бы не то, что на экране), поэтому запрет на сохранение обязан
+    // приехать наружу отдельно.
+    let onValidityChange: ((Bool) -> Void)?
 
     // Подсвечивать пустые обязательные поля сразу (для импорта/правки),
     // а на чистой ручной форме — не пугать красным до ввода.
@@ -36,9 +46,13 @@ struct ConfigEditorView: View {
     @State private var listen: String
     @State private var debug: Bool
 
-    init(initial: SavedConfig?, isEditing: Bool, onSave: @escaping (SavedConfig) -> Void) {
+    init(initial: SavedConfig?, isEditing: Bool, embedded: Bool = false,
+         onValidityChange: ((Bool) -> Void)? = nil,
+         onSave: @escaping (SavedConfig) -> Void) {
         self.isEditing = isEditing
+        self.embedded = embedded
         self.onSave = onSave
+        self.onValidityChange = onValidityChange
         self.prefilled = initial != nil
         self.clientId = initial?.clientId ?? ""
         _name = State(initialValue: initial?.name ?? "")
@@ -67,48 +81,84 @@ struct ConfigEditorView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 12) {
-                    LabeledField(title: "Название (обязательно)", icon: "character.cursor.ibeam",
-                                 placeholder: "Например, Мой сервер", text: $name,
-                                 error: nameError)
-
-                    LabeledField(title: "Адрес сервера (обязательно)", icon: "server.rack",
-                                 placeholder: "1.2.3.4:56000", text: $peer,
-                                 keyboard: .asciiCapable, error: peerError)
-
-                    obfuscationSection
-                    connectionSection
-                    performanceSection
-                    dnsSection
-                    otherSection
+        if embedded {
+            fields
+                .onChange(of: snapshot) { _ in
+                    onSave(buildConfig())
+                    onValidityChange?(canSave)
                 }
-                .padding()
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(isEditing ? "Редактирование" : "Новая конфигурация")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // Иконки вместо текста — «Отмена»/«Сохранить» в тулбаре сжимали
-                // длинный тайтл шита в эллипсис.
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
+                .onAppear { onValidityChange?(canSave) }
+        } else {
+            NavigationStack {
+                fields
+                    .navigationTitle(isEditing ? "Редактирование" : "Новый профиль")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        // Иконки вместо текста — «Отмена»/«Сохранить» в тулбаре сжимали
+                        // длинный тайтл шита в эллипсис.
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button { dismiss() } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .foregroundStyle(.primary)
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button { save() } label: {
+                                Image(systemName: "checkmark")
+                                .foregroundStyle(.primary)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.blue)
+                            .disabled(!canSave)
+                        }
                     }
-                    .foregroundStyle(.primary)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { save() } label: {
-                        Image(systemName: "checkmark")
-                        .foregroundStyle(.primary)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.blue)
-                    .disabled(!canSave)
-                }
             }
         }
+    }
+
+    private var fields: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                LabeledField(title: "Название (обязательно)", icon: "character.cursor.ibeam",
+                             placeholder: "Например, Мой сервер", text: $name,
+                             error: nameError)
+
+                LabeledField(title: "Адрес сервера (обязательно)", icon: "server.rack",
+                             placeholder: "1.2.3.4:56000", text: $peer,
+                             keyboard: .asciiCapable, error: peerError)
+
+                obfuscationSection
+                connectionSection
+                performanceSection
+                dnsSection
+                otherSection
+            }
+            .padding()
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    // Снимок всех редактируемых полей — единая точка для live-коммита в
+    // embedded-режиме: одно .onChange вместо одного на каждое поле.
+    private struct Snapshot: Equatable {
+        var name, peer: String
+        var manualCaptcha: Bool
+        var obfProfile, obfKey, obfTimingMsText: String
+        var transport, mode: String
+        var bond: Bool
+        var threadsText, streamsPerCredText: String
+        var dnsMode, dns: String
+        var turnEndpoint, listen: String
+        var debug: Bool
+    }
+
+    private var snapshot: Snapshot {
+        Snapshot(name: name, peer: peer, manualCaptcha: manualCaptcha,
+                 obfProfile: obfProfile, obfKey: obfKey, obfTimingMsText: obfTimingMsText,
+                 transport: transport, mode: mode, bond: bond,
+                 threadsText: threadsText, streamsPerCredText: streamsPerCredText,
+                 dnsMode: dnsMode, dns: dns,
+                 turnEndpoint: turnEndpoint, listen: listen, debug: debug)
     }
 
     // MARK: – Обфускация
@@ -326,9 +376,9 @@ struct ConfigEditorView: View {
             && threadsError == nil && streamsPerCredError == nil
     }
 
-    private func save() {
+    private func buildConfig() -> SavedConfig {
         let turnHostPort = turnHostPort
-        let c = SavedConfig(
+        return SavedConfig(
             name: trimName, peer: trimPeer, obfKey: trimObfKey,
             dns: trimDns, listen: trimListen,
             transport: transport, manualCaptcha: manualCaptcha,
@@ -338,7 +388,10 @@ struct ConfigEditorView: View {
             dnsMode: dnsMode, turnHost: turnHostPort?.host ?? "", turnPort: turnHostPort?.port ?? "",
             debug: debug, clientId: clientId
         )
-        onSave(c)
+    }
+
+    private func save() {
+        onSave(buildConfig())
         dismiss()
     }
 }

@@ -23,8 +23,9 @@ enum AllowedIPsBuilder {
 
     // MARK: – Sources
 
-    // Белый список CIDR РФ (веерные отключения).
-    private static let whitelistURL = URL(string:
+    // Белый список CIDR РФ (веерные отключения). internal: тот же URL
+    // переиспользует пресет SplitTunnelPresets.ruWhitelistURL.
+    static let whitelistURL = URL(string:
         "https://raw.githubusercontent.com/hxehex/russia-mobile-internet-whitelist/main/cidrwhitelist.txt"
     )!
 
@@ -34,7 +35,8 @@ enum AllowedIPsBuilder {
     )!
 
     // Запасной список VK-префиксов на случай недоступности RIPE API.
-    private static let vkFallbackCIDRs = [
+    // internal: BypassRoutes берёт их как стартовое значение, пока нет кэша.
+    static let vkFallbackCIDRs = [
         "87.240.128.0/18", "185.68.16.0/22", "93.186.224.0/21",
         "5.61.16.0/20", "212.119.96.0/20",
     ]
@@ -106,7 +108,8 @@ enum AllowedIPsBuilder {
     }
 
     // Тянем префиксы AS47764 из RIPE stat; при ошибке — fallback-константы.
-    private static func fetchVKCIDRs() async -> [String] {
+    // internal, а не private: тем же списком пользуется BypassRoutes (фаза 5.2).
+    static func fetchVKCIDRs() async -> [String] {
         struct RIPEPrefix: Decodable { let prefix: String }
         struct RIPEData: Decodable { let prefixes: [RIPEPrefix] }
         struct RIPEResponse: Decodable { let data: RIPEData }
@@ -127,6 +130,21 @@ enum AllowedIPsBuilder {
     private static let cidrRegex = try! NSRegularExpression(
         pattern: #"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})"#
     )
+
+    // Списки блокировок (antifilter/Re-filter) — один адрес или CIDR на
+    // строку, иногда с комментариями через #. В отличие от parseCIDRs, здесь
+    // валиден и голый IPv4 без "/".
+    static func parseListLines(_ s: String) -> [IPRange] {
+        var out: [IPRange] = []
+        s.enumerateLines { line, _ in
+            var trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let hash = trimmed.firstIndex(of: "#") { trimmed = String(trimmed[..<hash]) }
+            trimmed = trimmed.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, let r = parseCIDROrBareIP(trimmed) else { return }
+            out.append(r)
+        }
+        return out
+    }
 
     static func parseCIDRs(_ s: String) -> [IPRange] {
         let ns = s as NSString
@@ -152,6 +170,22 @@ enum AllowedIPsBuilder {
         guard octs.count == 4 else { return nil }
         let ip = UInt32(octs[0]) << 24 | UInt32(octs[1]) << 16 | UInt32(octs[2]) << 8 | UInt32(octs[3])
         return range(ip: ip, prefix: pfx)
+    }
+
+    // Как parseCIDR, но голый IPv4 (списки блокировок вроде antifilter их не
+    // сопровождают префиксом) трактуется как /32. Отдельная функция, а не
+    // расширение parseCIDR: последним пользуется VK-резолвер, где голый адрес
+    // всегда означает кривые данные, а не хост.
+    static func parseCIDROrBareIP(_ s: String) -> IPRange? {
+        if let r = parseCIDR(s) { return r }
+        guard !s.contains("/"), let value = ipv4Value(s) else { return nil }
+        return range(ip: value, prefix: 32)
+    }
+
+    private static func ipv4Value(_ s: String) -> UInt32? {
+        let octs = s.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+        guard octs.count == 4, octs.allSatisfy({ ($0 ?? -1) >= 0 && ($0 ?? -1) <= 255 }) else { return nil }
+        return UInt32(octs[0]!) << 24 | UInt32(octs[1]!) << 16 | UInt32(octs[2]!) << 8 | UInt32(octs[3]!)
     }
 
     static func range(ip: UInt32, prefix: Int) -> IPRange {

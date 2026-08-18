@@ -21,6 +21,13 @@ final class ProxyManager: ObservableObject {
     @Published var txRateBytesPerSec: Int64 = 0
     @Published var rxRateBytesPerSec: Int64 = 0
 
+    // Локальная половина дороги (план, фаза 2, WG-in-WG) — независимый от
+    // внешнего state статус: реконнект external-половины её не трогает, см.
+    // startLocalTunnelIfNeeded. Для старого режима (useLocalTunnel == false)
+    // остаётся false/0, UI показывает только один статус, как раньше.
+    @Published var localTunnelUp = false
+    @Published var localTunnelHandshakeAgeSec: Int64 = 0
+
     private var config: FreeTurnConfig?
     private var statsTimer: Timer?
     private var logShipTimer: Timer?   // ship unified buffer → worker (10s)
@@ -28,18 +35,54 @@ final class ProxyManager: ObservableObject {
     private var lastLoggedError = ""
     private let audio = AudioKeepAlive()
     private let mobile: MobileAPI
+    private let ftun: FtunAPI
+    private let localWGConfig: LocalWGConfigStoring
+    private let externalWGConfig: ExternalWGConfigStoring
 
     private static let probeInterval: TimeInterval = 5
     private static let probeURL = URL(string: "http://captive.apple.com")!
 
-    // Реконнект-цикл стартует из трёх мест, все идут через enterRetryCycle():
+    // WG-in-WG (план, фаза 2/5.3): локальный WG-responder слушает
+    // 127.0.0.1:<порт из общего LocalWGConfig, дефолт 9001>, апстрим-релей —
+    // на SavedConfig.listen (дефолт 127.0.0.1:9000, тот же, что и в старом
+    // режиме). ftun поднимается один раз за сессию — после первого
+    // connected — и не трогается реконнектом внешней половины.
+    private var ftunStarted = false
+
+    // Единственная очередь, с которой зовётся cgo-фасад ftun. Все три вызова
+    // блокирующие: start поднимает два device.Device и gvisor-стек, stop ждёт
+    // закрытия релеев, stats сериализует UAPI обоих девайсов — с главного
+    // потока это хич при подключении и подвисший UI при отключении. Очередь
+    // последовательная: порядок stop→start обязан сохраняться.
+    private let ftunQueue: DispatchQueue
+    private var ftunStatsInFlight = false
+
+    private func relayAddr(for c: SavedConfig) -> String {
+        let v = c.listen.trimmingCharacters(in: .whitespaces)
+        return v.isEmpty ? AppSettings.defaultListen : v
+    }
+
+    // Реконнект-цикл стартует из двух мест, оба идут через enterRetryCycle():
     //   • Go выдал error из connected (push через EventSink.onState);
-    //   • healthcheck-зонд (captive.apple.com) провалился;
-    //   • сменилась сеть (LTE↔Wi-Fi через NetworkMonitor).
+    //   • healthcheck-зонд (captive.apple.com) провалился.
     // Сам реконнект — один MobileRestart, без промежуточного stop+start:
     // ядро атомарно подменяет текущую сессию, поэтому нет окна, в котором
     // push мог бы прислать «случайный» idle.
-    private let network = NetworkMonitor()
+    //
+    // Третьим триггером была смена сети (NetworkMonitor) — убран. Включение
+    // самого AmneziaWG тоже выглядит как смена пути, поэтому реконнект бил по
+    // рукам ровно в тот момент, когда всё только поднималось. Реальный обрыв
+    // при переходе LTE↔Wi-Fi никуда не делся, но ловится зондом за ~5с — по
+    // факту поломки, а не по событию, которое поломкой быть не обязано.
+    private let protector = SocketProtector.shared
+
+    // Инжектируем, чтобы тесты не зависели от содержимого UserDefaults и файлов
+    // кэша. Синхронная намеренно: сеть на пути старта локальной половины даёт
+    // дедлок (см. startLocalTunnelIfNeeded) — SplitTunnelResolver сам читает
+    // только то, что уже лежит на диске/в UserDefaults, в сеть не ходит.
+    // bypassExcludeCIDRs сюда не входит — считается напрямую через
+    // BypassRoutes.excludes, см. startLocalTunnelIfNeeded.
+    private let bypassRoutes: (SplitTunnelConfig) -> [String]
 
     // Срабатывает только если в течение сессии хотя бы раз дошли до connected —
     // connecting→error не ретраит (это первичный провал коннекта, не реконнект).
@@ -65,11 +108,26 @@ final class ProxyManager: ObservableObject {
 
     private init() {
         self.mobile = LiveMobileAPI()
+        self.ftun = LiveFtunAPI()
+        self.localWGConfig = KeychainLocalWGConfigStore()
+        self.externalWGConfig = KeychainExternalWGConfigStore()
+        self.bypassRoutes = { SplitTunnelResolver.bypassCIDRs(for: $0) }
+        self.ftunQueue = DispatchQueue(label: "com.freeturn.proxy.ftun")
     }
 
-    // Инжектируемый init — для тестов с MockMobileAPI.
-    init(mobile: MobileAPI) {
+    // Инжектируемый init — для тестов с MockMobileAPI/MockFtunAPI.
+    init(mobile: MobileAPI, ftun: FtunAPI = LiveFtunAPI(),
+         localWGConfig: LocalWGConfigStoring = KeychainLocalWGConfigStore(),
+         externalWGConfig: ExternalWGConfigStoring = KeychainExternalWGConfigStore(),
+         bypassRoutes: @escaping (SplitTunnelConfig) -> [String] = { _ in [] },
+         ftunQueue: DispatchQueue = DispatchQueue(label: "com.freeturn.proxy.ftun")) {
         self.mobile = mobile
+        self.ftun = ftun
+        self.localWGConfig = localWGConfig
+        self.externalWGConfig = externalWGConfig
+        self.bypassRoutes = bypassRoutes
+        // Тест передаёт свою очередь, чтобы дождаться асинхронных вызовов ftun.
+        self.ftunQueue = ftunQueue
     }
 
     func loadConfig(_ config: FreeTurnConfig, fileName: String) {
@@ -96,25 +154,17 @@ final class ProxyManager: ObservableObject {
         backoffTickTimer = nil
         retryBackoffSeconds = 0
         inRetryCycle = false
+        ftunStarted = false
         CaptchaController.shared.resetPushSuppression()
         let persistLogs = UserDefaults.standard.object(forKey: DefaultsKeys.persistLogs) as? Bool ?? false
         if !persistLogs {
             ErrorLogger.shared.clear()
         }
         startActiveTimers()
-        network.onChange = { [weak self] in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                ErrorLogger.shared.appendAppLine(level: "WRN", message: "сетевая среда изменилась")
-                self.enterRetryCycle()
-            }
-        }
-        network.start()
     }
 
     func stop() {
         ErrorLogger.shared.shipBatch()
-        network.stop()
         autoReconnectWork?.cancel()
         autoReconnectWork = nil
         backoffTickTimer?.invalidate()
@@ -127,7 +177,16 @@ final class ProxyManager: ObservableObject {
         CaptchaController.shared.hide()
         UNUserNotificationCenter.current()
             .removeDeliveredNotifications(withIdentifiers: [lostNotifID, recoveredNotifID])
+        if ftunStarted {
+            ftunStarted = false
+            let ftun = self.ftun
+            ftunQueue.async { ftun.stop() }
+        }
+        localTunnelUp = false
+        localTunnelHandshakeAgeSec = 0
         mobile.stop()
+        mobile.setProtect(nil)
+        protector.deactivate()
         audio.stop()
         isRunning = false
         state = .idle
@@ -144,11 +203,90 @@ final class ProxyManager: ObservableObject {
     // фоновой очереди пока незачем. Понадобится, когда появится поддержка
     // subUrl.
     private func startMobile(_ cfg: FreeTurnConfig) throws {
+        // Ставим protect до start: апстрим читает его в момент dial, поэтому на
+        // уже открытые сокеты он не распространяется (план, фаза 5.1).
+        protector.activate()
+        mobile.setProtect(protector)
         try mobile.start(configJSON: CoreConfigBuilder.build(config: cfg.config, links: cfg.links).encodedJSON())
     }
 
     private func restartMobile(_ cfg: FreeTurnConfig) throws {
         try mobile.restart(configJSON: CoreConfigBuilder.build(config: cfg.config, links: cfg.links).encodedJSON())
+    }
+
+    // Вторая половина дороги (план, фаза 2): поднимается один раз за сессию,
+    // после первого connected внешней половины — реконнект mobile её не
+    // трогает, в этом весь смысл развязки. Не blocking: ошибка тут не должна
+    // рушить уже поднятый внешний туннель, только логируется.
+    private func startLocalTunnelIfNeeded() {
+        guard !ftunStarted, let config, config.config.useLocalTunnel else { return }
+        // Молчать тут нельзя: снаружи это выглядит как «туннель подключился,
+        // а интернета нет» — весь трафик уходит в utun и умирает, потому что
+        // локальную половину поднимать нечем.
+        guard let local = localWGConfig.load() else {
+            ErrorLogger.shared.appendAppLine(
+                level: "ERR", message: "локальный туннель не поднят: нет локального конфига WG"
+            )
+            return
+        }
+        guard let external = externalWGConfig.load(for: config.config.id) else {
+            ErrorLogger.shared.appendAppLine(
+                level: "ERR", message: "локальный туннель не поднят: у профиля нет конфига VPN-сервера"
+            )
+            return
+        }
+        // Оба сокета сидят на loopback: совпали порты — responder не забиндится
+        // («address already in use»), туннель встанет, а интернета не будет.
+        // Ловим до старта, иначе диагноз приходится читать из логов ftun.
+        let relay = relayAddr(for: config.config)
+        if Validators.port(ofEndpoint: relay) == local.port {
+            ErrorLogger.shared.appendAppLine(
+                level: "ERR",
+                message: "локальный туннель не поднят: порт \(local.port) занят туннелем (\(relay)) — задайте разные порты"
+            )
+            return
+        }
+        let bypass = bypassRoutes(config.config.splitTunnel)
+        let req = FtunStartRequest(
+            remoteConf: external.remoteConfText,
+            localPrivateKey: local.serverPrivateKey,
+            localPeerPublicKey: local.clientPublicKey,
+            relayAddr: relay,
+            listenPort: local.port,
+            mtu: LocalConfigBuilder.mtu,
+            bypassCIDRs: bypass,
+            bypassExcludeCIDRs: BypassRoutes.excludes(address: external.address, dns: external.dns)
+        )
+        // Обходные сокеты netstack'а тоже обязаны выходить мимо VPN —
+        // без protect обход замкнулся бы сам на себя (фаза 5.2).
+        protector.activate()
+        ftun.setProtect(protector)
+        // Флаг ставим до ухода в очередь: он же защищает от второго старта,
+        // пока первый ещё поднимается.
+        ftunStarted = true
+        ftunQueue.async { [weak self] in
+            guard let self else { return }
+            do {
+                try self.ftun.start(configJSON: req.encodedJSON())
+                let mode = config.config.splitTunnel.enabled ? config.config.splitTunnel.mode.title.lowercased() : "стандартный"
+                ErrorLogger.shared.appendAppLine(
+                    level: "INF",
+                    message: "локальный туннель поднят, режим «\(mode)», мимо туннеля: \(bypass.count) подсетей"
+                )
+                // Обновляем списки только теперь, когда дорога уже работает, и
+                // только ради следующего запуска — на старте этот запрос утонул
+                // бы в ещё не поднятом туннеле (см. BypassRoutes.swift:8-13).
+                Task {
+                    await BypassRoutes.refresh()
+                    await SplitTunnelListFetcher.refreshStale(config.config.splitTunnel.sources)
+                }
+            } catch {
+                ErrorLogger.shared.appendAppLine(
+                    level: "ERR", message: "локальный туннель не поднялся: \(error.localizedDescription)"
+                )
+                DispatchQueue.main.async { self.ftunStarted = false }
+            }
+        }
     }
 
     // MARK: – Push от EventSinkBridge
@@ -171,6 +309,7 @@ final class ProxyManager: ObservableObject {
                 inRetryCycle = false
                 postRecoveredNotification()
             }
+            startLocalTunnelIfNeeded()
         }
 
         // Пишем ошибку в единый буфер когда она появляется впервые.
@@ -348,6 +487,19 @@ final class ProxyManager: ObservableObject {
                 self.rxTotalBytes = snap?.rxTotal ?? 0
                 self.txRateBytesPerSec = snap?.txRate ?? 0
                 self.rxRateBytesPerSec = snap?.rxRate ?? 0
+            }
+            // Пропускаем тик, если предыдущий опрос ещё не вернулся: stats
+            // берёт тот же мьютекс, что start/stop, и на медленном ответе
+            // тики копились бы в очереди.
+            guard self.ftunStarted, !self.ftunStatsInFlight else { return }
+            self.ftunStatsInFlight = true
+            self.ftunQueue.async {
+                let ftunSnap = self.ftun.stats()
+                DispatchQueue.main.async {
+                    self.ftunStatsInFlight = false
+                    self.localTunnelUp = ftunSnap?.localUp ?? false
+                    self.localTunnelHandshakeAgeSec = ftunSnap?.localHandshakeAgeSec ?? 0
+                }
             }
         }
         logShipTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in

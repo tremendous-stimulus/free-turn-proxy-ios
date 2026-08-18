@@ -40,20 +40,6 @@ private struct NameStep: View {
                         .foregroundStyle(.secondary)
                 }
 
-                HStack {
-                    Label("Схема AllowedIPs", systemImage: "network.badge.shield.half.filled")
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                    Picker("Схема AllowedIPs", selection: $vm.selectedScheme) {
-                        ForEach(AllowedIPsBuilder.Scheme.allCases) { scheme in
-                            Text(scheme.rawValue).tag(scheme)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-
                 if let error {
                     HStack(spacing: 8) {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.red)

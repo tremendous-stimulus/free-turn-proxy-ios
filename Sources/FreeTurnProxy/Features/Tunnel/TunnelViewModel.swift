@@ -91,7 +91,7 @@ final class TunnelViewModel: ObservableObject {
 
     func share(_ c: SavedConfig) {
         guard let url = store.exportFile(c) else {
-            errorText = "Не удалось подготовить файл конфигурации"
+            errorText = "Не удалось подготовить файл профиля"
             return
         }
         shareURL = url

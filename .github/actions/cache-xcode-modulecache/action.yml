@@ -12,12 +12,20 @@ description: >
 runs:
   using: composite
   steps:
+    # xcodebuild -version изредка падает по SIGABRT сразу после переключения
+    # версии в setup-xcode (первый запуск на раннере) — ретраим вместо того,
+    # чтобы валить весь job из-за одноразового краша самого xcodebuild.
     - name: Compute cache key
       id: key
       shell: bash
       run: |
-        v=$(xcodebuild -version 2>/dev/null | head -n1 | awk '{print $2}')
-        echo "v=$v" >> "$GITHUB_OUTPUT"
+        v=""
+        for i in 1 2 3; do
+          v=$(xcodebuild -version 2>/dev/null | head -n1 | awk '{print $2}') && [ -n "$v" ] && break
+          echo "xcodebuild -version не отдал версию (попытка $i/3), повтор через 5с…"
+          sleep 5
+        done
+        echo "v=${v:-unknown}" >> "$GITHUB_OUTPUT"
 
     - uses: actions/cache@v4
       with:

@@ -12,7 +12,7 @@ enum ConfigCodecError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unreadable:
-            return "Файл не похож на конфигурацию Free Turn — не удалось прочитать ни одного поля"
+            return "Файл не похож на профиль Free Turn — не удалось прочитать ни одного поля"
         }
     }
 }

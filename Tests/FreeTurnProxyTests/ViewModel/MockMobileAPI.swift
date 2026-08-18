@@ -10,6 +10,10 @@ final class MockMobileAPI: MobileAPI {
     var stopCallCount = 0
     var clearLogsCalled = false
     var eventSinkSet: MobileEventSinkProtocol?
+    var protectorSet: MobileProtectorProtocol?
+    // Порядок важен: protect обязан быть установлен до start, иначе первые
+    // сокеты ядра уйдут в туннель (план, фаза 5.1).
+    var protectSetBeforeStart = false
 
     var startError: Error?
     var restartError: Error?
@@ -23,7 +27,10 @@ final class MockMobileAPI: MobileAPI {
     var txRate: Int64 = 0
     var rxRate: Int64 = 0
 
+    func setProtect(_ p: MobileProtectorProtocol?) { protectorSet = p }
+
     func start(configJSON: String) throws {
+        protectSetBeforeStart = protectorSet != nil
         startCalled = true
         startCallCount += 1
         lastConfigJSON = configJSON

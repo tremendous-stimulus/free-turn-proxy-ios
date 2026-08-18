@@ -13,6 +13,7 @@ protocol MobileAPI {
     func dumpLogs() -> String
     func clearLogs()
     func setEventSink(_ s: MobileEventSinkProtocol?)
+    func setProtect(_ p: MobileProtectorProtocol?)
     func validateConfig(_ json: String) -> String
     func version() -> String
 }
@@ -50,6 +51,10 @@ struct LiveMobileAPI: MobileAPI {
 
     func setEventSink(_ s: MobileEventSinkProtocol?) {
         MobileSetEventSink(s)
+    }
+
+    func setProtect(_ p: MobileProtectorProtocol?) {
+        MobileSetProtect(p)
     }
 
     func validateConfig(_ json: String) -> String {
