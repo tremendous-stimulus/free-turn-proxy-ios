@@ -4,6 +4,12 @@ struct HelpView: View {
     @Environment(\.isBannerVisible) private var isBannerVisible
     private let supportURL = URL(string: "https://t.me/freeturnproxy_ios_help_bot")!
 
+    // Скрытая диагностика: 5 тапов по версии показывают ID приложения и
+    // сессии — те же, что уходят с логами в телеметрию, полезно сверить
+    // при разборе жалобы в поддержку.
+    @State private var versionTapCount = 0
+    @State private var showDiagnosticIDs = false
+
     private let faq: [(q: String, a: String)] = [
         ("Как работает приложение?",
          "Оно устанавливает соединение с сервером, на котором работает VPN, через VK-звонок. Это соединение возможно даже когда включены белые списки интернета. Подробнее: https://github.com/samosvalishe/free-turn-proxy"),
@@ -62,6 +68,13 @@ struct HelpView: View {
 
                 HStack(spacing: 6) {
                     Text("Версия \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")")
+                        .onTapGesture {
+                            versionTapCount += 1
+                            if versionTapCount >= 5 {
+                                versionTapCount = 0
+                                showDiagnosticIDs = true
+                            }
+                        }
                     Text("·")
                     Link("GitHub", destination: URL(string: "https://github.com/tremendous-stimulus/free-turn-proxy-ios")!)
                 }
@@ -74,5 +87,15 @@ struct HelpView: View {
         }
         .navigationTitle("Помощь")
         .navigationBarTitleDisplayMode(isBannerVisible ? .inline : .large)
+        .alert("Диагностика", isPresented: $showDiagnosticIDs) {
+            Button("Скопировать") { UIPasteboard.general.string = diagnosticIDsText }
+            Button("OK") {}
+        } message: {
+            Text(diagnosticIDsText)
+        }
+    }
+
+    private var diagnosticIDsText: String {
+        "ID приложения: \(ErrorLogger.clientId)\nID сессии: \(ErrorLogger.shared.sessionTag)"
     }
 }
