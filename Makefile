@@ -35,6 +35,10 @@ framework:
 	# бы упасть или слинковаться с другим netstack без единой правки в репе.
 	cd $(SRC_DIR) && go get $(FTUN_DEPS)
 	cd $(SRC_DIR) && go get -tool golang.org/x/mobile/cmd/gobind && go mod tidy
+	# `go get -tool` только прописывает gobind в go.mod (tool-директива Go 1.24+),
+	# бинарник не собирает — gomobile bind ищет gobind через PATH, поэтому нужен
+	# отдельный go install версией, зафиксированной той же tool-директивой.
+	cd $(SRC_DIR) && go install golang.org/x/mobile/cmd/gobind
 	cd $(SRC_DIR) && gomobile bind -target ios,iossimulator -ldflags "-checklinkname=0" \
 		-o dist/Mobile.xcframework ./mobile ./ftun
 	rm -rf Frameworks/Mobile.xcframework
