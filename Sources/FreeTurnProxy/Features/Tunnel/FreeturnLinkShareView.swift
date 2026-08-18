@@ -35,7 +35,7 @@ struct FreeturnLinkShareView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 16))
                     }
                     
-                    Text("Отсканируйте QR во вкладке \"Туннель\" > \"Конфигурации\" > \"+\" > \"Сканировать QR\"")
+                    Text("Отсканируйте QR во вкладке \"Профили\" > \"+\" > \"Сканировать QR\"")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -51,7 +51,7 @@ struct FreeturnLinkShareView: View {
                 }
                 .padding()
             }
-            .navigationTitle("QR с конфигурацией")
+            .navigationTitle("QR с профилем")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

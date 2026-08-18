@@ -41,6 +41,46 @@ final class BypassRoutesTests: XCTestCase {
         XCTAssertEqual(excluded, ["10.8.0.0/24"])
     }
 
+    func test_network_ipv6_masksToPrefix() {
+        XCTAssertEqual(BypassRoutes.network(of: "fd00::2/64"), "fd00::/64")
+        XCTAssertEqual(BypassRoutes.network(of: "fd00::2"), "fd00::2/128")
+        XCTAssertNil(BypassRoutes.network(of: "fd00::2/129"))
+    }
+
+    func test_excludes_ipv6Address_isNotDropped() {
+        XCTAssertEqual(
+            BypassRoutes.excludes(address: "fd00::2/128", dns: "fd00::1"),
+            ["fd00::2/128", "fd00::1/128"]
+        )
+    }
+
+    // Типовой конфиг WG даёт host-префикс, и сеть из него не выводится: без
+    // отдельного исключения DNS резолвер туннеля (10.8.0.1) уходил бы мимо
+    // туннеля под общее правило «приватное — мимо», то есть DNS не работал бы
+    // вовсе.
+    func test_excludes_hostPrefixAddress_stillCoversTunnelDNS() {
+        XCTAssertEqual(
+            BypassRoutes.excludes(address: "10.8.0.2/32", dns: "10.8.0.1"),
+            ["10.8.0.2/32", "10.8.0.1/32"]
+        )
+    }
+
+    func test_excludes_multipleDNS_deduplicates() {
+        XCTAssertEqual(
+            BypassRoutes.excludes(address: "10.8.0.2/32", dns: "10.8.0.1, 10.8.0.2, 1.1.1.1"),
+            ["10.8.0.2/32", "10.8.0.1/32", "1.1.1.1/32"]
+        )
+    }
+
+    // Префикс у DNS исключать по подсети нельзя: это адрес резолвера, а не
+    // сеть, и /24 утащил бы в туннель лишнее.
+    func test_excludes_dnsWithPrefix_narrowedToHost() {
+        XCTAssertEqual(
+            BypassRoutes.excludes(address: "", dns: "10.8.0.1/24"),
+            ["10.8.0.1/32"]
+        )
+    }
+
     // current() обязан отдавать список без единого сетевого запроса: фетч на
     // пути старта локальной половины давал дедлок (тонул в ещё не поднятом
     // туннеле) и задерживал её на ~58 секунд.

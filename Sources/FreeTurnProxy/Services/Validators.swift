@@ -12,6 +12,21 @@ enum Validators {
         return true
     }
 
+    static func port(_ s: String) -> Bool {
+        guard let p = Int(s) else { return false }
+        return (1...65535).contains(p)
+    }
+
+    // Порт из "host:port" — нужен, чтобы поймать совпадение порта релея с
+    // портом локального WG-responder'а: они оба на loopback, и второй просто
+    // не забиндится («address already in use»).
+    static func port(ofEndpoint s: String) -> Int? {
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        guard let sep = trimmed.lastIndex(of: ":") else { return nil }
+        guard let p = Int(trimmed[trimmed.index(after: sep)...]), (1...65535).contains(p) else { return nil }
+        return p
+    }
+
     static func ipv4(_ s: String) -> Bool {
         let octets = s.split(separator: ".", omittingEmptySubsequences: false)
         guard octets.count == 4 else { return false }

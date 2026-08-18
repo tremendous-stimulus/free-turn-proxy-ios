@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 // Что роутер ftun уводит мимо туннеля (план vpn-lexical-rossum.md, фаза 5.2).
 // Список считается здесь, а применяется в Go: Swift знает и подсети VK, и
@@ -37,20 +38,59 @@ enum BypassRoutes {
     // Сеть самого VPN-сервера обязана остаться в туннеле: у типового конфига
     // это 10.8.0.0/24, и без исключения она попала бы под «приватное — мимо
     // туннеля», то есть трафик к собственному серверу ушёл бы напрямую.
-    static func excludes(address: String) -> [String] {
-        address
-            .split(separator: ",")
-            .compactMap { network(of: $0.trimmingCharacters(in: .whitespaces)) }
+    //
+    // Address почти всегда host-префикс (10.8.0.2/32), и тогда сеть из него не
+    // выводится — исключение схлопнулось бы в один собственный адрес, а
+    // DNS-резолвер туннеля (10.8.0.1) ушёл бы мимо. Поэтому адреса DNS входят
+    // в исключение отдельно, как /32.
+    static func excludes(address: String, dns: String = "") -> [String] {
+        let fromAddress = hosts(in: address).compactMap { network(of: $0) }
+        let fromDNS = hosts(in: dns).compactMap { network(of: hostPrefix($0)) }
+        var seen = Set<String>()
+        return (fromAddress + fromDNS).filter { seen.insert($0).inserted }
     }
 
-    // "10.8.0.2/24" → "10.8.0.0/24". Голый адрес трактуем как /32.
+    private static func hosts(in list: String) -> [String] {
+        list.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    // DNS в конфиге — голые адреса; на всякий случай режем чужой префикс,
+    // исключать по нему целую подсеть мы не хотим.
+    private static func hostPrefix(_ s: String) -> String {
+        String(s.split(separator: "/", maxSplits: 1).first ?? "")
+    }
+
+    // "10.8.0.2/24" → "10.8.0.0/24", "fd00::2/64" → "fd00::/64". Голый адрес
+    // трактуем как хост (/32 и /128 соответственно).
     static func network(of cidr: String) -> String? {
         let parts = cidr.split(separator: "/", maxSplits: 1)
-        guard let addr = parts.first.map(String.init), let value = ipv4(addr) else { return nil }
+        guard let addr = parts.first.map(String.init), !addr.isEmpty else { return nil }
+        if addr.contains(":") {
+            let bits = parts.count == 2 ? Int(parts[1]) ?? 128 : 128
+            return ipv6Network(addr, bits: bits)
+        }
+        guard let value = ipv4(addr) else { return nil }
         let bits = parts.count == 2 ? Int(parts[1]) ?? 32 : 32
         guard (0...32).contains(bits) else { return nil }
         let mask: UInt32 = bits == 0 ? 0 : ~UInt32(0) << (32 - bits)
         return "\(string(from: value & mask))/\(bits)"
+    }
+
+    // IPv6 в bypass-списках пока не встречается, но исключение обязано
+    // отработать и на IPv6-конфиге: молча выкинуть адрес сервера значило бы
+    // увести его трафик мимо туннеля в тот день, когда IPv6-диапазоны там
+    // появятся.
+    private static func ipv6Network(_ addr: String, bits: Int) -> String? {
+        guard (0...128).contains(bits), let ip = IPv6Address(addr) else { return nil }
+        var bytes = [UInt8](ip.rawValue)
+        for i in bytes.indices {
+            let keep = max(0, min(8, bits - i * 8))
+            bytes[i] &= keep == 0 ? 0 : ~UInt8(0) << (8 - keep)
+        }
+        guard let masked = IPv6Address(Data(bytes)) else { return nil }
+        return "\(masked.debugDescription)/\(bits)"
     }
 
     private static func ipv4(_ s: String) -> UInt32? {

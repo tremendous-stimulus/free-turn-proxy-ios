@@ -7,7 +7,7 @@ struct WGKeyPair: Equatable {
 }
 
 // Генерация X25519-пар для локального туннеля (план, фаза 2 — две пары на
-// профиль: локальный responder и клиент, см. LocalTunnelProfileFactory).
+// конфиг: локальный responder и клиент, см. LocalWGConfigFactory).
 // В отличие от ClientIdentity (случайные байты для идентификатора без
 // криптографического смысла), здесь нужен настоящий WireGuard-совместимый
 // keypair — CryptoKit единственный источник X25519 в проекте.

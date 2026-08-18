@@ -11,6 +11,11 @@ struct FreeTurnProxyApp: App {
         FtunEventSinkBridge.register()
         // Отправляем логи ошибок прошлых сессий, если есть сеть.
         ErrorLogger.shared.flushOnLaunch()
+        // «Обновился ли пользователь» определяем ровно один раз — по наличию
+        // профилей на первом запуске. Дальше профили могут появиться или
+        // исчезнуть, ответ от этого не меняется.
+        LaunchState.resolveUpgradedUser(hasConfigs: !ConfigStore.shared.configs.isEmpty)
+        LaunchState.recordRun()
     }
 
     var body: some Scene {

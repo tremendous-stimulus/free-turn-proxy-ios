@@ -7,10 +7,15 @@ struct ConfigEditorView: View {
     let isEditing: Bool
     // true — форма встроена прямо в раздел «Туннель» экрана деталей
     // конфигурации: без своего NavigationStack/тулбара, изменения полей
-    // коммитятся в onSave сразу по мере набора (как только форма валидна),
-    // отдельной кнопки «Сохранить» нет.
+    // коммитятся в onSave сразу по мере набора, отдельной кнопки «Сохранить»
+    // нет.
     let embedded: Bool
     let onSave: (SavedConfig) -> Void
+    // Валидность формы в embedded-режиме. Коммитим мы безусловно (иначе в
+    // черновике оставалось бы прежнее валидное значение и подтверждение
+    // сохранило бы не то, что на экране), поэтому запрет на сохранение обязан
+    // приехать наружу отдельно.
+    let onValidityChange: ((Bool) -> Void)?
 
     // Подсвечивать пустые обязательные поля сразу (для импорта/правки),
     // а на чистой ручной форме — не пугать красным до ввода.
@@ -41,10 +46,13 @@ struct ConfigEditorView: View {
     @State private var listen: String
     @State private var debug: Bool
 
-    init(initial: SavedConfig?, isEditing: Bool, embedded: Bool = false, onSave: @escaping (SavedConfig) -> Void) {
+    init(initial: SavedConfig?, isEditing: Bool, embedded: Bool = false,
+         onValidityChange: ((Bool) -> Void)? = nil,
+         onSave: @escaping (SavedConfig) -> Void) {
         self.isEditing = isEditing
         self.embedded = embedded
         self.onSave = onSave
+        self.onValidityChange = onValidityChange
         self.prefilled = initial != nil
         self.clientId = initial?.clientId ?? ""
         _name = State(initialValue: initial?.name ?? "")
@@ -74,13 +82,16 @@ struct ConfigEditorView: View {
 
     var body: some View {
         if embedded {
-            fields.onChange(of: snapshot) { _ in
-                if canSave { onSave(buildConfig()) }
-            }
+            fields
+                .onChange(of: snapshot) { _ in
+                    onSave(buildConfig())
+                    onValidityChange?(canSave)
+                }
+                .onAppear { onValidityChange?(canSave) }
         } else {
             NavigationStack {
                 fields
-                    .navigationTitle(isEditing ? "Редактирование" : "Новая конфигурация")
+                    .navigationTitle(isEditing ? "Редактирование" : "Новый профиль")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         // Иконки вместо текста — «Отмена»/«Сохранить» в тулбаре сжимали

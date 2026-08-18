@@ -1,7 +1,7 @@
 import XCTest
 @testable import FreeTurnProxy
 
-final class LocalTunnelProfileFactoryTests: XCTestCase {
+final class ExternalWGConfigFactoryTests: XCTestCase {
     private let sampleConf = """
     [Interface]
     PrivateKey = iF6qxNe5FbBOEVoNW1Aq1u8qUXfLI9wYU5FRV9G6/2E=
@@ -15,18 +15,15 @@ final class LocalTunnelProfileFactoryTests: XCTestCase {
     """
 
     func test_make_extractsAddressAndDNS() throws {
-        let profile = try LocalTunnelProfileFactory.make(remoteConfText: sampleConf)
-        XCTAssertEqual(profile.address, "10.0.0.2/32")
-        XCTAssertEqual(profile.dns, "8.8.8.8, 8.8.4.4")
-        XCTAssertEqual(profile.remoteConfText, sampleConf)
+        let config = try ExternalWGConfigFactory.make(remoteConfText: sampleConf)
+        XCTAssertEqual(config.address, "10.0.0.2/32")
+        XCTAssertEqual(config.dns, "8.8.8.8, 8.8.4.4")
+        XCTAssertEqual(config.remoteConfText, sampleConf)
     }
 
-    func test_make_generatesDistinctServerAndClientKeys() throws {
-        let profile = try LocalTunnelProfileFactory.make(remoteConfText: sampleConf)
-        XCTAssertNotEqual(profile.serverPrivateKey, profile.clientPrivateKey)
-        XCTAssertNotEqual(profile.serverPublicKey, profile.clientPublicKey)
-        XCTAssertFalse(profile.serverPrivateKey.isEmpty)
-        XCTAssertFalse(profile.clientPrivateKey.isEmpty)
+    func test_make_extractsEndpoint() throws {
+        let config = try ExternalWGConfigFactory.make(remoteConfText: sampleConf)
+        XCTAssertEqual(config.remoteEndpoint, "1.2.3.4:51820")
     }
 
     func test_make_missingAddress_throws() {
@@ -39,7 +36,7 @@ final class LocalTunnelProfileFactoryTests: XCTestCase {
         Endpoint = 1.2.3.4:51820
         AllowedIPs = 0.0.0.0/0
         """
-        XCTAssertThrowsError(try LocalTunnelProfileFactory.make(remoteConfText: conf))
+        XCTAssertThrowsError(try ExternalWGConfigFactory.make(remoteConfText: conf))
     }
 
     func test_make_missingDNS_defaultsToEmpty() throws {
@@ -53,7 +50,7 @@ final class LocalTunnelProfileFactoryTests: XCTestCase {
         Endpoint = 1.2.3.4:51820
         AllowedIPs = 0.0.0.0/0
         """
-        let profile = try LocalTunnelProfileFactory.make(remoteConfText: conf)
-        XCTAssertEqual(profile.dns, "")
+        let config = try ExternalWGConfigFactory.make(remoteConfText: conf)
+        XCTAssertEqual(config.dns, "")
     }
 }

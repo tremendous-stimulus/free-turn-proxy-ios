@@ -43,7 +43,7 @@ struct MainTabView: View {
                 TabView(selection: $tab) {
 
                     TunnelView()
-                        .tabItem { Label("Конфигурации", systemImage: "arrow.up.arrow.down") }
+                        .tabItem { Label("Профили", systemImage: "arrow.up.arrow.down") }
                         .tag(UIState.tunnelTabTag)
 
                     NavigationStack {

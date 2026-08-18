@@ -144,7 +144,7 @@ final class ConfigStore: ObservableObject {
         let peer = d.string(forKey: "manualPeer")?.trimmingCharacters(in: .whitespaces) ?? ""
         guard !peer.isEmpty else { return }
         configs = [SavedConfig(
-            name: "Моя конфигурация",
+            name: "Мой профиль",
             peer: peer,
             obfKey: d.string(forKey: "manualObfKey") ?? "",
             dns: d.string(forKey: "manualDns") ?? "",

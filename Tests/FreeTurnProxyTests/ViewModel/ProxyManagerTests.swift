@@ -9,11 +9,22 @@ final class ProxyManagerTests: XCTestCase {
         return (ProxyManager(mobile: mock), mock)
     }
 
-    private func managerWithFtun() -> (ProxyManager, MockMobileAPI, MockFtunAPI, InMemoryLocalTunnelProfileStore) {
+    // ProxyManager зовёт ftun с отдельной очереди (cgo блокирующий, с главного
+    // потока он вешал UI) — тест владеет этой очередью, чтобы дождаться вызова.
+    private let ftunQueue = DispatchQueue(label: "tests.ftun")
+
+    private func drainFtun() {
+        ftunQueue.sync {}
+    }
+
+    private func managerWithFtun() -> (ProxyManager, MockMobileAPI, MockFtunAPI, InMemoryLocalWGConfigStore, InMemoryExternalWGConfigStore) {
         let mobile = MockMobileAPI()
         let ftun = MockFtunAPI()
-        let store = InMemoryLocalTunnelProfileStore()
-        return (ProxyManager(mobile: mobile, ftun: ftun, localTunnelProfiles: store), mobile, ftun, store)
+        let localStore = InMemoryLocalWGConfigStore()
+        let externalStore = InMemoryExternalWGConfigStore()
+        return (ProxyManager(mobile: mobile, ftun: ftun, localWGConfig: localStore, externalWGConfig: externalStore,
+                             ftunQueue: ftunQueue),
+                mobile, ftun, localStore, externalStore)
     }
 
     private func sampleConfig() -> FreeTurnConfig {
@@ -23,10 +34,17 @@ final class ProxyManagerTests: XCTestCase {
         )
     }
 
-    private func sampleProfile(id: UUID) -> LocalTunnelProfile {
-        LocalTunnelProfile(
-            id: id, remoteConfText: "conf", serverPrivateKey: "sPriv", serverPublicKey: "sPub",
-            clientPrivateKey: "cPriv", clientPublicKey: "cPub", address: "10.0.0.2/32", dns: "8.8.8.8",
+    private func sampleLocalWGConfig() -> LocalWGConfig {
+        LocalWGConfig(
+            name: "freeturn-test", port: 9001,
+            serverPrivateKey: "sPriv", serverPublicKey: "sPub",
+            clientPrivateKey: "cPriv", clientPublicKey: "cPub", createdAt: Date()
+        )
+    }
+
+    private func sampleExternalWGConfig() -> ExternalWGConfig {
+        ExternalWGConfig(
+            remoteConfText: "conf", address: "10.0.0.2/32", dns: "10.0.0.1",
             remoteEndpoint: "1.2.3.4:51820", createdAt: Date(), sentAt: nil
         )
     }
@@ -244,38 +262,39 @@ final class ProxyManagerTests: XCTestCase {
     // MARK: – WG-in-WG (план, фаза 2)
 
     func test_localTunnel_startsAfterFirstConnected() throws {
-        let (pm, _, ftun, store) = managerWithFtun()
-        let profileID = UUID()
-        store.save(sampleProfile(id: profileID))
+        let (pm, _, ftun, localStore, externalStore) = managerWithFtun()
+        localStore.save(sampleLocalWGConfig())
         var cfg = sampleConfig()
         cfg.config.useLocalTunnel = true
-        cfg.config.wgProfileID = profileID
+        externalStore.save(sampleExternalWGConfig(), for: cfg.config.id)
         pm.loadConfig(cfg, fileName: "test.freeturn")
         try pm.start()
 
+        drainFtun()
         XCTAssertFalse(ftun.startCalled, "ftun не должен стартовать до первого connected")
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        drainFtun()
         XCTAssertTrue(ftun.startCalled)
         XCTAssertEqual(ftun.startCallCount, 1)
         pm.stop()
     }
 
     func test_localTunnel_notStarted_whenUseLocalTunnelFalse() throws {
-        let (pm, _, ftun, _) = managerWithFtun()
+        let (pm, _, ftun, _, _) = managerWithFtun()
         pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
         try pm.start()
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        drainFtun()
         XCTAssertFalse(ftun.startCalled)
         pm.stop()
     }
 
     func test_localTunnel_startsOnceAcrossReconnects() throws {
-        let (pm, _, ftun, store) = managerWithFtun()
-        let profileID = UUID()
-        store.save(sampleProfile(id: profileID))
+        let (pm, _, ftun, localStore, externalStore) = managerWithFtun()
+        localStore.save(sampleLocalWGConfig())
         var cfg = sampleConfig()
         cfg.config.useLocalTunnel = true
-        cfg.config.wgProfileID = profileID
+        externalStore.save(sampleExternalWGConfig(), for: cfg.config.id)
         pm.loadConfig(cfg, fileName: "test.freeturn")
         try pm.start()
 
@@ -283,58 +302,136 @@ final class ProxyManagerTests: XCTestCase {
         pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
 
+        drainFtun()
         XCTAssertEqual(ftun.startCallCount, 1, "ftun не перезапускается реконнектом внешней половины")
         pm.stop()
     }
 
     func test_localTunnel_stoppedOnStop() throws {
-        let (pm, _, ftun, store) = managerWithFtun()
-        let profileID = UUID()
-        store.save(sampleProfile(id: profileID))
+        let (pm, _, ftun, localStore, externalStore) = managerWithFtun()
+        localStore.save(sampleLocalWGConfig())
         var cfg = sampleConfig()
         cfg.config.useLocalTunnel = true
-        cfg.config.wgProfileID = profileID
+        externalStore.save(sampleExternalWGConfig(), for: cfg.config.id)
         pm.loadConfig(cfg, fileName: "test.freeturn")
         try pm.start()
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
 
         pm.stop()
+        drainFtun()
         XCTAssertEqual(ftun.stopCallCount, 1)
     }
 
-    func test_localTunnel_missingProfile_doesNotCrashOrStartFtun() throws {
-        let (pm, _, ftun, _) = managerWithFtun()
+    func test_localTunnel_missingConfig_doesNotCrashOrStartFtun() throws {
+        let (pm, _, ftun, _, _) = managerWithFtun()
         var cfg = sampleConfig()
-        cfg.config.useLocalTunnel = true
-        cfg.config.wgProfileID = UUID()   // профиля в сторе нет
+        cfg.config.useLocalTunnel = true   // ни локальный, ни внешний конфиг в сторе не заведены
         pm.loadConfig(cfg, fileName: "test.freeturn")
         try pm.start()
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        drainFtun()
+        XCTAssertFalse(ftun.startCalled)
+        pm.stop()
+    }
+
+    func test_localTunnel_missingExternalConfig_doesNotCrashOrStartFtun() throws {
+        let (pm, _, ftun, localStore, _) = managerWithFtun()
+        localStore.save(sampleLocalWGConfig())
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true   // общий локальный конфиг есть, а внешний для этого профиля — нет
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        drainFtun()
         XCTAssertFalse(ftun.startCalled)
         pm.stop()
     }
 
     func test_localTunnel_startSendsExpectedFields() throws {
-        let (pm, _, ftun, store) = managerWithFtun()
-        let profileID = UUID()
-        store.save(sampleProfile(id: profileID))
+        let (pm, _, ftun, localStore, externalStore) = managerWithFtun()
+        localStore.save(sampleLocalWGConfig())
         var cfg = sampleConfig()
         cfg.config.useLocalTunnel = true
-        cfg.config.wgProfileID = profileID
+        externalStore.save(sampleExternalWGConfig(), for: cfg.config.id)
         pm.loadConfig(cfg, fileName: "test.freeturn")
         try pm.start()
         pm.handleState("connected", streams: 1, total: 1, errMsg: "")
 
+        drainFtun()
         let data = Data((ftun.lastConfigJSON ?? "").utf8)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["remoteConf"] as? String, "conf")
         XCTAssertEqual(json["localPrivateKey"] as? String, "sPriv")
         XCTAssertEqual(json["localPeerPublicKey"] as? String, "cPub")
-        XCTAssertEqual(json["relayAddr"] as? String, "127.0.0.1:9001")
-        XCTAssertEqual(json["listenPort"] as? Int, 9000)
-        // Сеть VPN-сервера (Address профиля) обязана уехать в исключения,
-        // иначе трафик к нему ушёл бы мимо туннеля (план, фаза 5.2).
-        XCTAssertEqual(json["bypassExcludeCIDRs"] as? [String], ["10.0.0.2/32"])
+        // Тунель (апстрим-релей) — SavedConfig.listen, дефолт 127.0.0.1:9000;
+        // локальный WG-responder — порт из общего конфига, дефолт 9001 (план,
+        // «порты меняются местами» относительно первоначального замысла).
+        XCTAssertEqual(json["relayAddr"] as? String, "127.0.0.1:9000")
+        XCTAssertEqual(json["listenPort"] as? Int, 9001)
+        // Адрес и DNS внешнего конфига обязаны уехать в исключения, иначе
+        // трафик к серверу и резолверу туннеля ушёл бы мимо (план, фаза 5.2).
+        XCTAssertEqual(json["bypassExcludeCIDRs"] as? [String], ["10.0.0.2/32", "10.0.0.1/32"])
+        pm.stop()
+    }
+
+    func test_localTunnel_relayAddr_respectsCustomListen() throws {
+        let (pm, _, ftun, localStore, externalStore) = managerWithFtun()
+        localStore.save(sampleLocalWGConfig())
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true
+        cfg.config.listen = "127.0.0.1:12345"
+        externalStore.save(sampleExternalWGConfig(), for: cfg.config.id)
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        drainFtun()
+        let data = Data((ftun.lastConfigJSON ?? "").utf8)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["relayAddr"] as? String, "127.0.0.1:12345")
+        pm.stop()
+    }
+
+    // Релей и responder оба на loopback: одинаковый порт означал бы
+    // «address already in use» внутри ftun и туннель без интернета.
+    func test_localTunnel_portCollisionWithRelay_doesNotStartFtun() throws {
+        let (pm, _, ftun, localStore, externalStore) = managerWithFtun()
+        localStore.save(sampleLocalWGConfig())   // порт 9001
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true
+        cfg.config.listen = "127.0.0.1:9001"     // туннель на том же порту
+        externalStore.save(sampleExternalWGConfig(), for: cfg.config.id)
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        drainFtun()
+        XCTAssertFalse(ftun.startCalled)
+        pm.stop()
+    }
+
+    // Разные профили держат разные внешние серверы на общей локальной
+    // половине — ровно то, что просил юзер этим рефактором.
+    func test_localTunnel_differentProfiles_useDifferentExternalConfigs() throws {
+        let (pm, _, ftun, localStore, externalStore) = managerWithFtun()
+        localStore.save(sampleLocalWGConfig())
+        var cfg = sampleConfig()
+        cfg.config.useLocalTunnel = true
+        var otherExternal = sampleExternalWGConfig()
+        otherExternal.remoteConfText = "other-conf"
+        otherExternal.address = "10.9.0.2/32"
+        externalStore.save(otherExternal, for: cfg.config.id)
+        // Внешний конфиг какого-то другого профиля не должен быть виден.
+        externalStore.save(sampleExternalWGConfig(), for: UUID())
+        pm.loadConfig(cfg, fileName: "test.freeturn")
+        try pm.start()
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+
+        drainFtun()
+        let data = Data((ftun.lastConfigJSON ?? "").utf8)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["remoteConf"] as? String, "other-conf")
+        XCTAssertEqual(json["bypassExcludeCIDRs"] as? [String], ["10.9.0.2/32", "10.0.0.1/32"])
         pm.stop()
     }
 }

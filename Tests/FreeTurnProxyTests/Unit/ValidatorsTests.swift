@@ -188,4 +188,18 @@ final class ValidatorsTests: XCTestCase {
     func test_dnsServers_rejectsIfAnyEntryInvalid() {
         XCTAssertFalse(Validators.dnsServers("8.8.8.8, not-an-ip"))
     }
+
+    // MARK: – port(ofEndpoint:)
+
+    func test_portOfEndpoint_extractsPort() {
+        XCTAssertEqual(Validators.port(ofEndpoint: "127.0.0.1:9001"), 9001)
+        XCTAssertEqual(Validators.port(ofEndpoint: "  127.0.0.1:9000  "), 9000)
+    }
+
+    func test_portOfEndpoint_rejectsMalformed() {
+        XCTAssertNil(Validators.port(ofEndpoint: "127.0.0.1"))
+        XCTAssertNil(Validators.port(ofEndpoint: "127.0.0.1:0"))
+        XCTAssertNil(Validators.port(ofEndpoint: "127.0.0.1:70000"))
+        XCTAssertNil(Validators.port(ofEndpoint: "127.0.0.1:abc"))
+    }
 }

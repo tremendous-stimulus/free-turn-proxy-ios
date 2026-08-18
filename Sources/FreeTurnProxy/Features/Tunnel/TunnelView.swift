@@ -5,8 +5,6 @@ struct TunnelView: View {
     @ObservedObject private var proxy = ProxyManager.shared
     @ObservedObject private var store = ConfigStore.shared
     @ObservedObject private var captcha = CaptchaController.shared
-    private static let onboardingProfiles = KeychainLocalTunnelProfileStore()
-    @State private var editorTarget: EditorTarget?
     @State private var pendingDelete: SavedConfig?
     @State private var showUndo = false
     @State private var showImportPicker = false
@@ -15,7 +13,17 @@ struct TunnelView: View {
     @State private var linkInputText = ""
     @State private var showQRScan = false
     @State private var navPath = NavigationPath()
+    // Черновики создаваемых профилей — живут только тут, до подтверждения
+    // (галочка в TunnelDetailView) в ConfigStore не попадают. Ключ — id
+    // черновика, тот же, что уходит в navPath как ProfileRoute.new(id:).
+    @State private var pendingDrafts: [UUID: SavedConfig] = [:]
     @Environment(\.isBannerVisible) private var isBannerVisible
+    // Ненавязчивая подсказка про новый режим подключения — только тем, кто
+    // обновился с предыдущей версии (на свежей установке нечего «пробовать
+    // заново», режим и так дефолтный). Флаг считается один раз на старте
+    // (LaunchState), крестик гасит его насовсем.
+    @AppStorage(DefaultsKeys.isUpgradedUser) private var isUpgradedUser: Bool?
+    private var showNewModeHint: Bool { isUpgradedUser == true }
 
     // Литерал-плейсхолдер трактовался бы как LocalizedStringKey, и SwiftUI
     // автолинкует в нём голый "https://"-подобный текст синим.
@@ -34,24 +42,24 @@ struct TunnelView: View {
                 .padding()
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Конфигурации")
+            .navigationTitle("Профили")
             .navigationBarTitleDisplayMode(isBannerVisible ? .inline : .large)
-            .navigationDestination(for: UUID.self) { id in
-                TunnelDetailView(configID: id, vm: vm)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) { addConfigMenu }
+            }
+            .navigationDestination(for: ProfileRoute.self) { route in
+                switch route {
+                case .existing(let id):
+                    TunnelDetailView(configID: id, isNew: false, initialDraft: store.configs.first(where: { $0.id == id }) ?? SavedConfig(name: "", peer: ""), vm: vm)
+                case .new(let id):
+                    TunnelDetailView(configID: id, isNew: true, initialDraft: pendingDrafts[id] ?? SavedConfig(name: "", peer: ""), vm: vm)
+                        .onDisappear { pendingDrafts[id] = nil }
+                }
             }
             .alert("Ошибка", isPresented: .isNotNil($vm.errorText)) {
                 Button("OK") { vm.errorText = nil }
             } message: {
                 Text(vm.errorText ?? "")
-            }
-            .sheet(item: $editorTarget) { target in
-                ConfigEditorView(initial: target.initial, isEditing: target.editingID != nil) { saved in
-                    if let id = target.editingID {
-                        var s = saved; s.id = id; store.update(s)
-                    } else {
-                        store.add(saved)
-                    }
-                }
             }
             .sheet(isPresented: .isNotNil($vm.shareURL)) {
                 if let url = vm.shareURL { ShareSheet(items: [url]) }
@@ -68,9 +76,7 @@ struct TunnelView: View {
                 }
             }
             .sheet(isPresented: $showQRScan) {
-                FreeturnLinkScanSheet { cfg in
-                    editorTarget = EditorTarget(initial: cfg, editingID: nil)
-                }
+                FreeturnLinkScanSheet { cfg in addAndOpen(cfg) }
             }
             .fileImporter(
                 isPresented: $showImportPicker,
@@ -93,7 +99,7 @@ struct TunnelView: View {
                 Button("Удалить", role: .destructive) { store.delete(c) }
                 Button("Отмена", role: .cancel) {}
             }
-            .alert("Вернуть удалённую конфигурацию?", isPresented: $showUndo,
+            .alert("Вернуть удалённый профиль?", isPresented: $showUndo,
                    presenting: store.lastDeleted) { _ in
                 Button("Вернуть") { store.undoDelete() }
                 Button("Отмена", role: .cancel) {}
@@ -103,17 +109,27 @@ struct TunnelView: View {
             .onShake { if store.lastDeleted != nil { showUndo = true } }
             .onChange(of: store.pendingImport) { cfg in
                 guard let cfg else { return }
-                editorTarget = EditorTarget(initial: cfg, editingID: nil)
+                addAndOpen(cfg)
                 store.pendingImport = nil
             }
             .onAppear {
                 // Файл могли открыть до появления вью (холодный старт).
                 if let cfg = store.pendingImport {
-                    editorTarget = EditorTarget(initial: cfg, editingID: nil)
+                    addAndOpen(cfg)
                     store.pendingImport = nil
                 }
             }
         }
+    }
+
+    // Добавление и импорт (ссылка/QR/файл/вручную) ведут на один и тот же
+    // экран, что и редактирование — без отдельного попапа с полями: там уже
+    // есть всё нужное (имя, адрес, режим VPN), включая режим WG-in-WG. В
+    // ConfigStore профиль попадает только по галочке на этом экране — до
+    // этого момента он существует лишь как черновик здесь.
+    private func addAndOpen(_ cfg: SavedConfig) {
+        pendingDrafts[cfg.id] = cfg
+        navPath.append(ProfileRoute.new(id: cfg.id))
     }
 
     private func importLink() {
@@ -122,7 +138,7 @@ struct TunnelView: View {
         guard !text.isEmpty else { return }
         do {
             let cfg = try FreeturnLink.parse(text, defaultName: "Импортировано по ссылке")
-            editorTarget = EditorTarget(initial: cfg, editingID: nil)
+            addAndOpen(cfg)
         } catch {
             vm.errorText = error.localizedDescription
         }
@@ -134,7 +150,7 @@ struct TunnelView: View {
             guard let url = urls.first else { return }
             do {
                 let cfg = try ConfigCodec.parse(contentsOf: url)
-                editorTarget = EditorTarget(initial: cfg, editingID: nil)
+                addAndOpen(cfg)
             } catch {
                 vm.errorText = error.localizedDescription
             }
@@ -147,9 +163,6 @@ struct TunnelView: View {
 
     private func activeConfigSection(_ c: SavedConfig) -> some View {
         VStack(spacing: 14) {
-            if let step = onboardingStep(for: c) {
-                onboardingChecklist(currentStep: step)
-            }
             statusRow(color: statusColor, text: statusMessage)
 
             if captcha.pendingURL != nil {
@@ -226,43 +239,6 @@ struct TunnelView: View {
         }
     }
 
-    // Онбординг: чеклист из трёх шагов, пока новый режим не настроен целиком.
-    // Профиль читается напрямую из Keychain — лёгкий разовый доступ, заводить
-    // его в ProxyManager/TunnelViewModel ради одного чтения на экране не нужно.
-    private static let onboardingSteps = [
-        "Добавьте конфиг вашего VPN-сервера",
-        "Отправьте профиль в AmneziaWG",
-        "Нажмите «Подключиться»",
-    ]
-
-    private func onboardingStep(for c: SavedConfig) -> Int? {
-        guard c.useLocalTunnel else { return nil }
-        guard let profileID = c.wgProfileID,
-              let profile = Self.onboardingProfiles.load(profileID) else { return 1 }
-        guard profile.sentAt != nil else { return 2 }
-        guard !proxy.isRunning else { return nil }
-        return 3
-    }
-
-    private func onboardingChecklist(currentStep: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(Self.onboardingSteps.enumerated()), id: \.offset) { i, text in
-                let step = i + 1
-                HStack(spacing: 10) {
-                    Image(systemName: step < currentStep ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(step < currentStep ? .green : .secondary)
-                    Text(text)
-                        .font(.footnote)
-                        .foregroundStyle(step == currentStep ? .primary : .secondary)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
     private var statsBlock: some View {
         VStack(spacing: 6) {
             Divider()
@@ -293,7 +269,7 @@ struct TunnelView: View {
     private var amneziaHint: some View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
-            hintRow("Если конфига AmneziaWG/WireGuard ещё нет, его можно сгенерировать в деталях этой конфигурации.")
+            hintRow("Если конфига AmneziaWG/WireGuard ещё нет, его можно сгенерировать в деталях этого профиля.")
             hintRow("Конфиг уже есть? Просто откройте AmneziaWG/WireGuard и включите VPN.")
         }
         .font(.footnote)
@@ -324,37 +300,34 @@ struct TunnelView: View {
 
     // MARK: – Saved configs
 
+    private var addConfigMenu: some View {
+        Menu {
+            Button {
+                addAndOpen(SavedConfig(name: "", peer: ""))
+            } label: { Label("Настроить вручную", systemImage: "square.and.pencil") }
+            Button {
+                showLinkInput = true
+            } label: { Label("Ввести ссылку", systemImage: "link") }
+            Button {
+                showQRScan = true
+            } label: { Label("Сканировать QR", systemImage: "qrcode.viewfinder") }
+            Button {
+                showImportPicker = true
+            } label: { Label("Загрузить файл", systemImage: "doc.badge.plus") }
+        } label: {
+            Image(systemName: "plus")
+        }
+        .accessibilityLabel("Добавить профиль")
+        .disabled(proxy.isRunning)
+    }
+
     private var configsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if showNewModeHint { newModeHintBubble }
             if store.showShakeHint { shakeHintBubble }
 
-            HStack {
-                Label("Конфигурации", systemImage: "list.bullet")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Menu {
-                    Button {
-                        editorTarget = EditorTarget(initial: nil, editingID: nil)
-                    } label: { Label("Настроить вручную", systemImage: "square.and.pencil") }
-                    Button {
-                        showLinkInput = true
-                    } label: { Label("Ввести ссылку", systemImage: "link") }
-                    Button {
-                        showQRScan = true
-                    } label: { Label("Сканировать QR", systemImage: "qrcode.viewfinder") }
-                    Button {
-                        showImportPicker = true
-                    } label: { Label("Загрузить файл", systemImage: "doc.badge.plus") }
-                } label: {
-                    Image(systemName: "plus.circle.fill").font(.title3)
-                }
-                .accessibilityLabel("Добавить конфигурацию")
-                .disabled(proxy.isRunning)
-            }
-
             if store.configs.isEmpty {
-                Text("Нет сохранённых конфигураций. Нажмите + чтобы добавить.")
+                Text("Нет сохранённых профилей. Нажмите «Добавить», чтобы создать первый.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -378,7 +351,7 @@ struct TunnelView: View {
             Spacer()
             Menu {
                 Button {
-                    navPath.append(c.id)
+                    navPath.append(ProfileRoute.existing(c.id))
                 } label: { Label("Редактировать", systemImage: "pencil") }
                     .disabled(proxy.isRunning && isSelected)
                 Menu {
@@ -410,6 +383,29 @@ struct TunnelView: View {
         .opacity(proxy.isRunning && !isSelected ? 0.4 : 1)
     }
 
+    // Подсказка про новый режим подключения — в отличие от shakeHintBubble не
+    // скрывается сама по себе, только по нажатию на крестик, и после этого
+    // не появляется больше никогда (флаг в UserDefaults).
+    private var newModeHintBubble: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+            Text("Попробуйте новый режим подключения к WG/AWG с улучшенной стабильностью")
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button {
+                withAnimation { isUpgradedUser = false }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .foregroundStyle(.white)
+        .background(Color.blue, in: RoundedRectangle(cornerRadius: 10))
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
     // Разовая подсказка про шейк-отмену удаления, авто-скрытие через ~4с.
     private var shakeHintBubble: some View {
         HStack(spacing: 8) {
@@ -430,10 +426,10 @@ struct TunnelView: View {
     }
 }
 
-// Цель редактора: editingID == nil — добавление (initial может быть из импорта),
-// иначе редактирование существующей записи.
-struct EditorTarget: Identifiable {
-    let id = UUID()
-    var initial: SavedConfig?
-    var editingID: UUID?
+// Пункт навигации к TunnelDetailView: существующий профиль (id уже в
+// ConfigStore) или черновик нового (id только в TunnelView.pendingDrafts,
+// пока пользователь не подтвердит создание галочкой).
+enum ProfileRoute: Hashable {
+    case existing(UUID)
+    case new(id: UUID)
 }

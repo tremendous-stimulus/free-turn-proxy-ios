@@ -14,4 +14,6 @@ enum DefaultsKeys {
     static let bypassVKCIDRs = "bypassVKCIDRs.v1"
     static let coreClientId = "core_client_id"
     static let refreshBannerAnchorAt = "refresh_banner_anchor_at"
+    static let isUpgradedUser = "isUpgradedUser.v1"
+    static let lastRunVersion = "lastRunVersion.v1"
 }

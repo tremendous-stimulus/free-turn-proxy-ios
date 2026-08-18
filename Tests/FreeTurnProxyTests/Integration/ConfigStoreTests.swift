@@ -101,7 +101,7 @@ final class ConfigStoreTests: XCTestCase {
         let store = ConfigStore(defaults: defaults)
         XCTAssertEqual(store.configs.count, 1)
         let cfg = store.configs.first!
-        XCTAssertEqual(cfg.name, "Моя конфигурация")
+        XCTAssertEqual(cfg.name, "Мой профиль")
         XCTAssertEqual(cfg.peer, "1.2.3.4:5")
         XCTAssertEqual(cfg.obfKey, "deadbeef")
         XCTAssertEqual(cfg.transport, "tcp")

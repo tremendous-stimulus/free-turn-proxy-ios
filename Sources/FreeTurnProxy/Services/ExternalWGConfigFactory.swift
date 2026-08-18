@@ -1,29 +1,21 @@
 import Foundation
 
-// Собирает LocalTunnelProfile из введённого пользователем .conf: парсит
-// Address/DNS секции [Interface] (см. LocalConfigBuilder — роутер Фазы 1
-// чистый L3 pass-through без NAT, поэтому Address обязан совпадать с
-// реальным конфигом) и генерирует две пары ключей.
-enum LocalTunnelProfileFactory {
+// Собирает ExternalWGConfig из введённого пользователем .conf: парсит
+// Address/DNS/Endpoint. Локальная половина (LocalWGConfigFactory) сюда не
+// входит — она не зависит от конкретного внешнего сервера.
+enum ExternalWGConfigFactory {
     enum FactoryError: LocalizedError {
         case missingAddress
         var errorDescription: String? { "В конфиге не найден Address — обязателен для локального туннеля" }
     }
 
-    static func make(id: UUID = UUID(), remoteConfText: String) throws -> LocalTunnelProfile {
+    static func make(remoteConfText: String) throws -> ExternalWGConfig {
         guard let address = interfaceField("Address", in: remoteConfText) else {
             throw FactoryError.missingAddress
         }
         let dns = interfaceField("DNS", in: remoteConfText) ?? ""
-        let server = LocalTunnelIdentity.generateKeyPair()
-        let client = LocalTunnelIdentity.generateKeyPair()
-        return LocalTunnelProfile(
-            id: id,
+        return ExternalWGConfig(
             remoteConfText: remoteConfText,
-            serverPrivateKey: server.privateKeyBase64,
-            serverPublicKey: server.publicKeyBase64,
-            clientPrivateKey: client.privateKeyBase64,
-            clientPublicKey: client.publicKeyBase64,
             address: address,
             dns: dns,
             remoteEndpoint: sectionField("Endpoint", section: "[Peer]", in: remoteConfText) ?? "",

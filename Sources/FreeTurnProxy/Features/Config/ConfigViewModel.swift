@@ -13,6 +13,12 @@ final class ConfigViewModel: ObservableObject {
 
     private var pendingConfig: String?
 
+    // Endpoint, который уедет в сгенерированный .conf. Задаёт экран, с
+    // которого открыт генератор: AppSettings.listen — это релей глобально
+    // ВЫБРАННОГО профиля, а генерируем мы для открытого (и, возможно, ещё не
+    // сохранённого).
+    var relayEndpoint = AppSettings.listen
+
     // Шаг 1: валидируем сырой конфиг и показываем экран ввода названия.
     // Сам сканер ставит на паузу View (по showNaming) — здесь только данные.
     func stage(rawConfig text: String, defaultName: String) {
@@ -50,7 +56,7 @@ final class ConfigViewModel: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined()
         let fileName = (safeName.isEmpty ? "tunnel" : safeName) + ".conf"
-        let endpoint = AppSettings.listen
+        let endpoint = relayEndpoint
 
         Task.detached {
             do {

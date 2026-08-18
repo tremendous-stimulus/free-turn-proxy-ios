@@ -6,3 +6,5 @@ FreeTurnProxy.xcodeproj/
 CLAUDE.md
 TestResults.xcresult/
 build/
+DerivedData/
+.codegraph/
