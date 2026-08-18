@@ -16,6 +16,10 @@ import Mobile
 protocol FtunAPI {
     func start(configJSON: String) throws
     func stop()
+    // Программный аналог тумблера AmneziaWG (план, фаза 1): заново взводит
+    // ретрансмит хендшейка на обеих половинах дороги, не пересоздавая
+    // сессию. No-op без активного Start().
+    func nudge()
     func stats() -> FtunSnapshot?
     func setEventSink(_ s: FtunEventSinkProtocol?)
     func setProtect(_ p: FtunProtectorProtocol?)
@@ -51,6 +55,10 @@ struct LiveFtunAPI: FtunAPI {
 
     func stop() {
         FtunStop()
+    }
+
+    func nudge() {
+        FtunNudge()
     }
 
     func stats() -> FtunSnapshot? {

@@ -61,9 +61,48 @@ func (c StartConfig) validate() error {
 	return nil
 }
 
+// forcedPersistentKeepalive — вопреки .conf пользователя и умолчаниям обоих
+// WG-half'ов, keepalive всегда включён. Без него amneziawg-go сдаётся
+// навсегда после MaxTimerHandshakes неудачных хендшейков
+// (device/timers.go: expiredRetransmitHandshake) и не восстанавливается сам
+// даже когда причина обрыва (смена сети, кратковременный дроп) уже прошла —
+// см. план /Users/stepan/.claude/plans/swirling-spinning-meteor.md, причина
+// №1. Keepalive перевзводит ретрансмит хендшейка на каждый пакет
+// (timersAnyAuthenticatedPacketTraversal), поэтому «giving up» перестаёт
+// быть терминальным.
+const forcedPersistentKeepalive = 25
+
 // half — одна из двух половин дороги (см. план, раздел "Экран туннеля").
 type half struct {
 	device *device.Device
+	// peerKeys — публичные ключи пиров этой половины, для Nudge() (api.go):
+	// программный аналог тумблера AmneziaWG, LookupPeer+SendHandshakeInitiation
+	// на сдавшемся пире.
+	peerKeys []device.NoisePublicKey
+}
+
+// nudge шлёт свежую (не-retry) инициацию хендшейка каждому пиру половины —
+// SendHandshakeInitiation(isRetry: false) сбрасывает handshakeAttempts, то
+// есть заново взводит ретрансмиты у пира, который уже "giving up". No-op,
+// если пир не найден (например, устройство уже закрыто).
+func (h *half) nudge() {
+	for _, pk := range h.peerKeys {
+		if peer := h.device.LookupPeer(pk); peer != nil {
+			peer.SendHandshakeInitiation(false)
+		}
+	}
+}
+
+func keyToNoisePublicKey(base64Key string) (device.NoisePublicKey, error) {
+	var pk device.NoisePublicKey
+	hexKey, err := keyToHex(base64Key)
+	if err != nil {
+		return pk, err
+	}
+	if err := pk.FromHex(hexKey); err != nil {
+		return pk, fmt.Errorf("NoisePublicKey: %w", err)
+	}
+	return pk, nil
 }
 
 func (h *half) stats() (up bool, handshakeAgeSec int64, txBytes, rxBytes int64, err error) {
@@ -152,13 +191,19 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 		ListenPort: cfg.ListenPort,
 	}
 	localPeers := []PeerConf{{
-		PublicKey:  cfg.LocalPeerPublicKey,
-		AllowedIPs: []string{"0.0.0.0/0", "::/0"},
+		PublicKey:           cfg.LocalPeerPublicKey,
+		AllowedIPs:          []string{"0.0.0.0/0", "::/0"},
+		PersistentKeepalive: forcedPersistentKeepalive,
 	}}
 	localUAPI, err := localIface.BuildUAPI(localPeers)
 	if err != nil {
 		rt.close()
 		return nil, fmt.Errorf("не удалось собрать UAPI локального девайса: %w", err)
+	}
+	localPeerKeys, err := peerKeysOf(localPeers)
+	if err != nil {
+		rt.close()
+		return nil, fmt.Errorf("ключи пиров локального девайса: %w", err)
 	}
 
 	localDev := device.NewDevice(localTun, NewLoopbackBind(), logger)
@@ -172,6 +217,7 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	remotePeers := make([]PeerConf, len(remoteConf.Peers))
 	for i, p := range remoteConf.Peers {
 		p.Endpoint = cfg.RelayAddr // апстрим всегда идёт через локальный релей, не напрямую
+		p.PersistentKeepalive = forcedPersistentKeepalive
 		remotePeers[i] = p
 	}
 	remoteIface := remoteConf.Interface
@@ -182,6 +228,13 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 		remoteTun.Close()
 		rt.close()
 		return nil, fmt.Errorf("не удалось собрать UAPI внешнего девайса: %w", err)
+	}
+	remotePeerKeys, err := peerKeysOf(remotePeers)
+	if err != nil {
+		localDev.Close()
+		remoteTun.Close()
+		rt.close()
+		return nil, fmt.Errorf("ключи пиров внешнего девайса: %w", err)
 	}
 
 	remoteDev := device.NewDevice(remoteTun, NewLoopbackBind(), logger)
@@ -208,10 +261,28 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	rt.start()
 
 	return &session{
-		local:  half{device: localDev},
-		remote: half{device: remoteDev},
+		local:  half{device: localDev, peerKeys: localPeerKeys},
+		remote: half{device: remoteDev, peerKeys: remotePeerKeys},
 		router: rt,
 	}, nil
+}
+
+func peerKeysOf(peers []PeerConf) ([]device.NoisePublicKey, error) {
+	keys := make([]device.NoisePublicKey, len(peers))
+	for i, p := range peers {
+		pk, err := keyToNoisePublicKey(p.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("[Peer] #%d: %w", i, err)
+		}
+		keys[i] = pk
+	}
+	return keys, nil
+}
+
+// nudge — см. half.nudge; шлёт свежую инициацию хендшейка обеим половинам.
+func (s *session) nudge() {
+	s.local.nudge()
+	s.remote.nudge()
 }
 
 func (s *session) close() {

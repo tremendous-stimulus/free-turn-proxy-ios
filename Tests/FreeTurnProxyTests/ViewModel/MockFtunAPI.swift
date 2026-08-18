@@ -6,6 +6,7 @@ final class MockFtunAPI: FtunAPI {
     var startCalled = false
     var startCallCount = 0
     var stopCallCount = 0
+    var nudgeCallCount = 0
     var startError: Error?
     var lastConfigJSON: String?
     var eventSinkSet: FtunEventSinkProtocol?
@@ -22,6 +23,10 @@ final class MockFtunAPI: FtunAPI {
 
     func stop() {
         stopCallCount += 1
+    }
+
+    func nudge() {
+        nudgeCallCount += 1
     }
 
     func stats() -> FtunSnapshot? {
