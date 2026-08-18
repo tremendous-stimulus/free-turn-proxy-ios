@@ -29,8 +29,9 @@ struct SavedConfig: Identifiable, Codable, Equatable {
     // WG-in-WG (план vpn-lexical-rossum.md, фаза 2/5.3): реальный конфиг и
     // ключи живут в LocalWGConfigStore (Keychain) — общий на все профили, а
     // не по одному на каждый, поэтому здесь только флаг режима, без ссылки.
-    // false = старый режим, транспарентный релей на 127.0.0.1:9000. Дефолт —
-    // true: новым профилям сразу предлагаем WG-in-WG, старый режим — опция.
+    // false = старый режим, транспарентный релей на 127.0.0.1:9000. Дефолт
+    // конструктора — true: новым профилям сразу предлагаем WG-in-WG, старый
+    // режим — опция. У декодера (init(from:)) дефолт другой — см. там.
     var useLocalTunnel: Bool = true
 
     // Раздельное туннелирование — только для useLocalTunnel: в старом режиме
@@ -103,7 +104,12 @@ struct SavedConfig: Identifiable, Codable, Equatable {
         turnPort = try c.decodeIfPresent(String.self, forKey: .turnPort) ?? ""
         debug = try c.decodeIfPresent(Bool.self, forKey: .debug) ?? false
         clientId = try c.decodeIfPresent(String.self, forKey: .clientId) ?? ""
-        useLocalTunnel = try c.decodeIfPresent(Bool.self, forKey: .useLocalTunnel) ?? true
+        // Отсутствие ключа означает запись, сохранённую до появления WG-in-WG —
+        // такой профиль обязан остаться в старом режиме. Дефолт true (в
+        // memberwise init) — только для действительно новых профилей,
+        // создаваемых уже после этого поля; здесь, в декодере, отсутствие
+        // ключа — это ровно противоположный случай.
+        useLocalTunnel = try c.decodeIfPresent(Bool.self, forKey: .useLocalTunnel) ?? false
         splitTunnel = try c.decodeIfPresent(SplitTunnelConfig.self, forKey: .splitTunnel) ?? SplitTunnelConfig()
     }
 }
