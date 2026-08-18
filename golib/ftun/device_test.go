@@ -245,9 +245,15 @@ type tunReader interface {
 }
 
 // TestNewSession_ForcesPersistentKeepalive — план, фаза 1: keepalive
-// принудительно проставляется на обе половины независимо от того, что было
+// принудительно проставляется на ВНЕШНЮЮ половину независимо от того, что было
 // (или не было) в пользовательском remoteConf, иначе amneziawg-go сдаётся
 // навсегда после серии неудачных хендшейков и не восстанавливается сам.
+//
+// И столь же обязательно НЕ проставляется на локальную: там мы responder,
+// endpoint пира неизвестен до первого хендшейка клиента, а device.upLocked()
+// при ненулевом keepalive стреляет SendKeepalive() сразу по Up() — получаем
+// вечный "no known endpoint for peer" на уровне Errorf, пока пользователь не
+// включил AmneziaWG. См. комментарий к forcedPersistentKeepalive.
 func TestNewSession_ForcesPersistentKeepalive(t *testing.T) {
 	_, clientPub := genKeypair(t)
 	localPriv, _ := genKeypair(t)
@@ -278,8 +284,8 @@ func TestNewSession_ForcesPersistentKeepalive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("local IpcGet: %v", err)
 	}
-	if !strings.Contains(localUAPI, "persistent_keepalive_interval=25\n") {
-		t.Fatalf("local UAPI без форсированного keepalive:\n%s", localUAPI)
+	if strings.Contains(localUAPI, "persistent_keepalive_interval=25\n") {
+		t.Fatalf("на локальной половине keepalive стоять не должен:\n%s", localUAPI)
 	}
 
 	remoteUAPI, err := sess.remote.device.IpcGet()
@@ -326,4 +332,86 @@ func TestSession_Nudge(t *testing.T) {
 	defer sess.close()
 
 	sess.nudge()
+}
+
+// errCapturingLogger — как testLogger, но ещё копит строки Errorf, чтобы тест
+// мог утверждать про отсутствие конкретной ошибки, а не только про отсутствие
+// паники.
+func errCapturingLogger(t *testing.T, tag string) (*device.Logger, func() []string) {
+	var mu sync.Mutex
+	var errs []string
+	finished := false
+	t.Cleanup(func() {
+		mu.Lock()
+		finished = true
+		mu.Unlock()
+	})
+	verbosef := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if finished {
+			return
+		}
+		t.Logf("["+tag+"] "+format, args...)
+	}
+	errorf := func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
+		mu.Lock()
+		defer mu.Unlock()
+		if finished {
+			return
+		}
+		errs = append(errs, line)
+		t.Logf("["+tag+" ERR] %s", line)
+	}
+	return &device.Logger{Verbosef: verbosef, Errorf: errorf},
+		func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]string(nil), errs...)
+		}
+}
+
+// TestNewSession_LocalHalfSilentUntilClientConnects — регрессия: пока
+// пользователь не включил AmneziaWG, у пира локальной половины нет endpoint'а,
+// и любая попытка что-то ему отправить даёт "no known endpoint for peer" на
+// уровне Errorf. Раньше forcedPersistentKeepalive на локальном пире заводил
+// этот цикл сразу по Up() и потом перезапускал его каждые 25с — бесконечный
+// поток ERR в логах приложения и в телеметрии на ровном месте.
+func TestNewSession_LocalHalfSilentUntilClientConnects(t *testing.T) {
+	_, clientPub := genKeypair(t)
+	localPriv, _ := genKeypair(t)
+	remotePriv, _ := genKeypair(t)
+	_, vpsPub := genKeypair(t)
+
+	remoteConf := fmt.Sprintf(
+		"[Interface]\nPrivateKey = %s\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\n",
+		remotePriv, vpsPub,
+	)
+	logger, capturedErrors := errCapturingLogger(t, "session")
+	cfg := StartConfig{
+		RemoteConf:         remoteConf,
+		LocalPrivateKey:    localPriv,
+		LocalPeerPublicKey: clientPub,
+		RelayAddr:          fmt.Sprintf("127.0.0.1:%d", mustGetFreePort(t)),
+		ListenPort:         mustGetFreePort(t),
+		MTU:                1280,
+	}
+	sess, err := newSession(cfg, logger)
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	defer sess.close()
+
+	// Первый ретрансмит хендшейка — через RekeyTimeout (5с), но keepalive-путь
+	// стрелял немедленно из upLocked(), так что регрессия ловится сразу.
+	// Ступень 0 лестницы обязана быть так же молчалива.
+	sess.nudge()
+	time.Sleep(300 * time.Millisecond)
+
+	for _, line := range capturedErrors() {
+		if strings.Contains(line, "no known endpoint for peer") {
+			t.Fatalf("локальная половина шлёт в пира без endpoint'а: %s", line)
+		}
+	}
 }

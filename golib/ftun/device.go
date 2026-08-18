@@ -61,15 +61,31 @@ func (c StartConfig) validate() error {
 	return nil
 }
 
-// forcedPersistentKeepalive — вопреки .conf пользователя и умолчаниям обоих
-// WG-half'ов, keepalive всегда включён. Без него amneziawg-go сдаётся
-// навсегда после MaxTimerHandshakes неудачных хендшейков
+// forcedPersistentKeepalive — вопреки .conf пользователя и умолчанию,
+// keepalive всегда включён на ВНЕШНЕЙ половине. Без него amneziawg-go
+// сдаётся навсегда после MaxTimerHandshakes неудачных хендшейков
 // (device/timers.go: expiredRetransmitHandshake) и не восстанавливается сам
 // даже когда причина обрыва (смена сети, кратковременный дроп) уже прошла —
 // см. план /Users/stepan/.claude/plans/swirling-spinning-meteor.md, причина
 // №1. Keepalive перевзводит ретрансмит хендшейка на каждый пакет
 // (timersAnyAuthenticatedPacketTraversal), поэтому «giving up» перестаёт
 // быть терминальным.
+//
+// На ЛОКАЛЬНОЙ половине его ставить нельзя, и это не вкусовщина. Локальная
+// половина — responder: Endpoint её пира (AmneziaWG на устройстве) неизвестен,
+// пока клиент сам не пришлёт первый хендшейк. А device.upLocked() при
+// ненулевом keepalive дёргает SendKeepalive() сразу по Up() → нет keypair →
+// SendHandshakeInitiation → SendBuffers → "no known endpoint for peer" →
+// device.Logger.Errorf. Дальше самоподдерживающийся цикл: ретрансмит каждые
+// 5с (18 попыток), «giving up» гасит sendKeepalive, но НЕ persistentKeepalive,
+// тот через 25с снова зовёт SendKeepalive → handshakeAttempts сбрасывается
+// в 0 → по кругу. Пока пользователь не включил VPN (нормальный порядок
+// действий!), это бесконечный поток ERR в логах и в телеметрии.
+//
+// Направление, которое реально надо держать живым, — клиент → ftun, и оно
+// закрывается строкой PersistentKeepalive в конфиге, который мы отдаём в
+// AmneziaWG (Sources/.../LocalConfigBuilder.swift): там инициатор, и он
+// endpoint знает.
 const forcedPersistentKeepalive = 25
 
 // half — одна из двух половин дороги (см. план, раздел "Экран туннеля").
@@ -77,7 +93,8 @@ type half struct {
 	device *device.Device
 	// peerKeys — публичные ключи пиров этой половины, для Nudge() (api.go):
 	// программный аналог тумблера AmneziaWG, LookupPeer+SendHandshakeInitiation
-	// на сдавшемся пире.
+	// на сдавшемся пире. Заполнены только у внешней половины — локальную
+	// пинать нечем и незачем, см. session.nudge.
 	peerKeys []device.NoisePublicKey
 }
 
@@ -190,20 +207,16 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 		PrivateKey: cfg.LocalPrivateKey,
 		ListenPort: cfg.ListenPort,
 	}
+	// Без PersistentKeepalive — см. комментарий к forcedPersistentKeepalive:
+	// у responder'а нет endpoint'а пира до первого хендшейка клиента.
 	localPeers := []PeerConf{{
-		PublicKey:           cfg.LocalPeerPublicKey,
-		AllowedIPs:          []string{"0.0.0.0/0", "::/0"},
-		PersistentKeepalive: forcedPersistentKeepalive,
+		PublicKey:  cfg.LocalPeerPublicKey,
+		AllowedIPs: []string{"0.0.0.0/0", "::/0"},
 	}}
 	localUAPI, err := localIface.BuildUAPI(localPeers)
 	if err != nil {
 		rt.close()
 		return nil, fmt.Errorf("не удалось собрать UAPI локального девайса: %w", err)
-	}
-	localPeerKeys, err := peerKeysOf(localPeers)
-	if err != nil {
-		rt.close()
-		return nil, fmt.Errorf("ключи пиров локального девайса: %w", err)
 	}
 
 	localDev := device.NewDevice(localTun, NewLoopbackBind(), logger)
@@ -261,7 +274,7 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	rt.start()
 
 	return &session{
-		local:  half{device: localDev, peerKeys: localPeerKeys},
+		local:  half{device: localDev},
 		remote: half{device: remoteDev, peerKeys: remotePeerKeys},
 		router: rt,
 	}, nil
@@ -279,9 +292,13 @@ func peerKeysOf(peers []PeerConf) ([]device.NoisePublicKey, error) {
 	return keys, nil
 }
 
-// nudge — см. half.nudge; шлёт свежую инициацию хендшейка обеим половинам.
+// nudge — см. half.nudge. Пинаем только внешнюю половину: ступень 0 лестницы
+// восстановления по плану (фаза 2.3) адресована именно ей («remote-половина
+// молчит»), а инициация в сторону локального пира до того, как пользователь
+// включил AmneziaWG, — гарантированный "no known endpoint for peer" на уровне
+// Errorf плюс сброс handshakeAttempts, то есть новая серия ретрансмитов в
+// пустоту (см. комментарий к forcedPersistentKeepalive).
 func (s *session) nudge() {
-	s.local.nudge()
 	s.remote.nudge()
 }
 
