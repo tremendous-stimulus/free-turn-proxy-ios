@@ -137,6 +137,30 @@ final class ProxyManager: ObservableObject {
     private var lastInterfaceIndex: UInt32 = 0
     private var networkPathObserverID: UUID?
 
+    // Читаемые логи цепочки (план, фаза 3): каждое из четырёх звеньев
+    // (путь сети, локальный WG, внешний WG, ядро/TURN) то и дело колышется —
+    // зонд каждые 5с, стримы, rx/tx. В лог должны попадать только переходы
+    // up↔down, не сами измерения (те и так на DBG в соседних местах).
+    private var chainHealth = ChainHealth()
+
+    private func logChainTransition(_ link: String, up: Bool) {
+        if let message = chainHealth.transitionMessage(for: link, up: up, now: Date()) {
+            ErrorLogger.shared.appendAppLine(level: "DBG", message: message)
+        }
+    }
+
+    // Единственная точка мутации state — чтобы «ядро/TURN» звено цепочки
+    // логировалось из одного места независимо от того, откуда пришла смена
+    // (push от Go, лестница восстановления, waitingNetwork).
+    private func setState(_ newState: TunnelState) {
+        let wasConnected = state == .connected
+        state = newState
+        let isConnected = newState == .connected
+        if wasConnected != isConnected {
+            logChainTransition("ядро/TURN", up: isConnected)
+        }
+    }
+
     // Сколько секунд осталось до следующей попытки реконнекта. Обновляется раз
     // в секунду, чтобы UI мог показывать «Переподключаемся через X с».
     @Published var retryBackoffSeconds: Int = 0
@@ -209,6 +233,7 @@ final class ProxyManager: ObservableObject {
         retryBackoffSeconds = 0
         inRetryCycle = false
         ftunStarted = false
+        chainHealth = ChainHealth()
         probeFailureStreak = 0
         lastRxTotalAtProbe = 0
         lastInterfaceIndex = networkPath.currentSnapshot.interfaceIndex
@@ -259,7 +284,8 @@ final class ProxyManager: ObservableObject {
         protector.deactivate()
         audio.stop()
         isRunning = false
-        state = .idle
+        setState(.idle)
+        chainHealth = ChainHealth()
         connectedStreams = 0
         totalStreams = 0
         errorMessage = ""
@@ -366,7 +392,7 @@ final class ProxyManager: ObservableObject {
     // поллингом getState() раз в 0.5с.
     func handleState(_ goState: String, streams: Int, total: Int, errMsg: String) {
         let st = TunnelState(goState: goState)
-        state = st
+        setState(st)
         connectedStreams = streams
         totalStreams = total
         errorMessage = errMsg
@@ -444,6 +470,7 @@ final class ProxyManager: ObservableObject {
         guard isRunning else { return }
         let previousIndex = lastInterfaceIndex
         lastInterfaceIndex = snapshot.interfaceIndex
+        logChainTransition("путь сети", up: snapshot.isSatisfied)
 
         if !snapshot.isSatisfied {
             enterWaitingNetwork()
@@ -471,7 +498,7 @@ final class ProxyManager: ObservableObject {
         backoffTickTimer?.invalidate()
         backoffTickTimer = nil
         retryBackoffSeconds = 0
-        state = .waitingNetwork
+        setState(.waitingNetwork)
         connectedStreams = 0
         ErrorLogger.shared.appendAppLine(level: "DBG", message: "путь сети недоступен, ждём восстановления")
     }
@@ -530,7 +557,7 @@ final class ProxyManager: ObservableObject {
             return
         }
 
-        state = .retryBackoff
+        setState(.retryBackoff)
         let delay = autoReconnectDelay(forAttempt: stepAttempt)
         ErrorLogger.shared.appendAppLine(
             level: "DBG",
@@ -570,18 +597,18 @@ final class ProxyManager: ObservableObject {
                 performRecoveryStep(.wake)
                 return
             }
-            state = .connecting
+            setState(.connecting)
             ErrorLogger.shared.appendAppLine(level: "DBG", message: "ступень 0: nudge WG-in-WG")
             let ftun = self.ftun
             ftunQueue.async { ftun.nudge() }
             scheduleCheapStepFollowUp()
         case .wake:
-            state = .connecting
+            setState(.connecting)
             ErrorLogger.shared.appendAppLine(level: "DBG", message: "ступень 1: mobile.wake()")
             mobile.wake()
             scheduleCheapStepFollowUp()
         case .restart:
-            state = .connecting
+            setState(.connecting)
             ErrorLogger.shared.appendAppLine(level: "DBG", message: "ступень 2: restartMobile")
             do {
                 try restartMobile(config)
@@ -589,7 +616,7 @@ final class ProxyManager: ObservableObject {
                 triggerAutoReconnect()
             }
         case .fullRestart:
-            state = .connecting
+            setState(.connecting)
             ErrorLogger.shared.appendAppLine(level: "DBG", message: "ступень 3: полный перезапуск ftun + restartMobile")
             if ftunStarted {
                 ftunStarted = false
@@ -637,7 +664,7 @@ final class ProxyManager: ObservableObject {
         inRetryCycle = false
         autoReconnectAttempt = 0
         probeFailureStreak = 0
-        state = .connected
+        setState(.connected)
         ErrorLogger.shared.appendAppLine(level: "INF", message: "туннель восстановлен без пересоздания сессии")
         postRecoveredNotification()
     }
@@ -712,6 +739,8 @@ final class ProxyManager: ObservableObject {
                     self.localTunnelHandshakeAgeSec = ftunSnap?.localHandshakeAgeSec ?? 0
                     self.remoteTunnelUp = ftunSnap?.remoteUp ?? false
                     self.remoteTunnelHandshakeAgeSec = ftunSnap?.remoteHandshakeAgeSec ?? 0
+                    self.logChainTransition("локальный WG", up: self.localTunnelUp)
+                    self.logChainTransition("внешний WG", up: self.remoteTunnelUp)
                 }
             }
         }
@@ -780,4 +809,32 @@ final class ProxyManager: ObservableObject {
 enum AppError: LocalizedError {
     case noConfig
     var errorDescription: String? { "Конфиг не загружен" }
+}
+
+// Читаемые логи цепочки (план, фаза 3): держит последний известный up/down
+// каждого звена и момент, когда оно ушло в down — чтобы посчитать «down→up
+// за Nс». Первое наблюдение звена — это baseline, а не переход, поэтому
+// сообщения не даёт. now передаётся снаружи, а не Date() внутри, чтобы
+// логика оставалась тестируемой без реального времени.
+private struct ChainHealth {
+    private var up: [String: Bool] = [:]
+    private var downSince: [String: Date] = [:]
+
+    mutating func transitionMessage(for link: String, up isUp: Bool, now: Date) -> String? {
+        let previous = up[link]
+        up[link] = isUp
+        guard let previous else {
+            if !isUp { downSince[link] = now }
+            return nil
+        }
+        guard previous != isUp else { return nil }
+        if isUp {
+            let downFor = downSince[link].map { Int(now.timeIntervalSince($0)) } ?? 0
+            downSince[link] = nil
+            return "звено \(link): down→up за \(downFor)с"
+        } else {
+            downSince[link] = now
+            return "звено \(link): up→down"
+        }
+    }
 }
