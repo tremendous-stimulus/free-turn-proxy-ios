@@ -89,6 +89,7 @@ struct TunnelDetailView: View {
             && Validators.endpoint(draft.peer)
             && (!draft.useLocalTunnel || wgConfigVM.hasServerConfig)
             && !hasPortCollision
+            && !draft.splitTunnel.isUnsafeIncludeSetup
     }
 
     var body: some View {
@@ -106,6 +107,7 @@ struct TunnelDetailView: View {
                         ConfigEditorView(initial: draft, isEditing: true, embedded: true,
                                          onValidityChange: { editorValid = $0 }) { saved in
                             var s = saved; s.id = configID; s.useLocalTunnel = draft.useLocalTunnel
+                            s.splitTunnel = draft.splitTunnel
                             draft = s
                         }
                         .disabled(proxy.isRunning && isSelected)
@@ -113,6 +115,8 @@ struct TunnelDetailView: View {
                         modeCard
                         if draft.useLocalTunnel {
                             LocalWGConfigCard(vm: wgConfigVM, relayPortOwners: relayPortOwners)
+                            SplitTunnelSummaryCard(config: $draft.splitTunnel)
+                                .disabled(proxy.isRunning && isSelected)
                         } else {
                             legacyCard
                         }

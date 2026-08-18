@@ -16,4 +16,6 @@ enum DefaultsKeys {
     static let refreshBannerAnchorAt = "refresh_banner_anchor_at"
     static let isUpgradedUser = "isUpgradedUser.v1"
     static let lastRunVersion = "lastRunVersion.v1"
+    static let splitTunnelMeta = "splitTunnelMeta.v1"
+    static let logsMinLevel = "logsMinLevel.v1"
 }

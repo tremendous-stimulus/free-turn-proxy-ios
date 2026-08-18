@@ -76,10 +76,13 @@ final class ProxyManager: ObservableObject {
     // факту поломки, а не по событию, которое поломкой быть не обязано.
     private let protector = SocketProtector.shared
 
-    // Инжектируем, чтобы тесты не зависели от содержимого UserDefaults.
-    // Синхронный намеренно: сеть на пути старта локальной половины даёт
-    // дедлок (см. startLocalTunnelIfNeeded).
-    private let bypassRoutes: () -> [String]
+    // Инжектируем, чтобы тесты не зависели от содержимого UserDefaults и файлов
+    // кэша. Синхронная намеренно: сеть на пути старта локальной половины даёт
+    // дедлок (см. startLocalTunnelIfNeeded) — SplitTunnelResolver сам читает
+    // только то, что уже лежит на диске/в UserDefaults, в сеть не ходит.
+    // bypassExcludeCIDRs сюда не входит — считается напрямую через
+    // BypassRoutes.excludes, см. startLocalTunnelIfNeeded.
+    private let bypassRoutes: (SplitTunnelConfig) -> [String]
 
     // Срабатывает только если в течение сессии хотя бы раз дошли до connected —
     // connecting→error не ретраит (это первичный провал коннекта, не реконнект).
@@ -108,7 +111,7 @@ final class ProxyManager: ObservableObject {
         self.ftun = LiveFtunAPI()
         self.localWGConfig = KeychainLocalWGConfigStore()
         self.externalWGConfig = KeychainExternalWGConfigStore()
-        self.bypassRoutes = { BypassRoutes.current() }
+        self.bypassRoutes = { SplitTunnelResolver.bypassCIDRs(for: $0) }
         self.ftunQueue = DispatchQueue(label: "com.freeturn.proxy.ftun")
     }
 
@@ -116,7 +119,7 @@ final class ProxyManager: ObservableObject {
     init(mobile: MobileAPI, ftun: FtunAPI = LiveFtunAPI(),
          localWGConfig: LocalWGConfigStoring = KeychainLocalWGConfigStore(),
          externalWGConfig: ExternalWGConfigStoring = KeychainExternalWGConfigStore(),
-         bypassRoutes: @escaping () -> [String] = { [] },
+         bypassRoutes: @escaping (SplitTunnelConfig) -> [String] = { _ in [] },
          ftunQueue: DispatchQueue = DispatchQueue(label: "com.freeturn.proxy.ftun")) {
         self.mobile = mobile
         self.ftun = ftun
@@ -243,7 +246,7 @@ final class ProxyManager: ObservableObject {
             )
             return
         }
-        let bypass = bypassRoutes()
+        let bypass = bypassRoutes(config.config.splitTunnel)
         let req = FtunStartRequest(
             remoteConf: external.remoteConfText,
             localPrivateKey: local.serverPrivateKey,
@@ -265,13 +268,18 @@ final class ProxyManager: ObservableObject {
             guard let self else { return }
             do {
                 try self.ftun.start(configJSON: req.encodedJSON())
+                let mode = config.config.splitTunnel.enabled ? config.config.splitTunnel.mode.title.lowercased() : "стандартный"
                 ErrorLogger.shared.appendAppLine(
-                    level: "INF", message: "локальный туннель поднят, мимо туннеля: \(bypass.count) подсетей"
+                    level: "INF",
+                    message: "локальный туннель поднят, режим «\(mode)», мимо туннеля: \(bypass.count) подсетей"
                 )
-                // Список подсетей VK обновляем только теперь, когда дорога уже
-                // работает, и только ради следующего запуска — на старте этот
-                // запрос утонул бы в ещё не поднятом туннеле.
-                Task { await BypassRoutes.refresh() }
+                // Обновляем списки только теперь, когда дорога уже работает, и
+                // только ради следующего запуска — на старте этот запрос утонул
+                // бы в ещё не поднятом туннеле (см. BypassRoutes.swift:8-13).
+                Task {
+                    await BypassRoutes.refresh()
+                    await SplitTunnelListFetcher.refreshStale(config.config.splitTunnel.sources)
+                }
             } catch {
                 ErrorLogger.shared.appendAppLine(
                     level: "ERR", message: "локальный туннель не поднялся: \(error.localizedDescription)"

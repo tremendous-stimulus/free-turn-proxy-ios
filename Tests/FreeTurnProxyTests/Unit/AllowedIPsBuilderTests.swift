@@ -48,6 +48,38 @@ final class AllowedIPsBuilderTests: XCTestCase {
         XCTAssertTrue(AllowedIPsBuilder.parseCIDRs("1.2.3.4/40").isEmpty)
     }
 
+    // MARK: – parseCIDROrBareIP / parseListLines (списки блокировок вроде antifilter)
+
+    func test_parseCIDROrBareIP_acceptsBareAddress() {
+        let r = AllowedIPsBuilder.parseCIDROrBareIP("1.2.3.4")
+        let ip: UInt32 = (1 << 24) | (2 << 16) | (3 << 8) | 4
+        XCTAssertEqual(r?.start, ip)
+        XCTAssertEqual(r?.end, ip)
+    }
+
+    func test_parseCIDROrBareIP_stillAcceptsCIDR() {
+        XCTAssertEqual(AllowedIPsBuilder.parseCIDROrBareIP("10.0.0.0/8"), AllowedIPsBuilder.parseCIDR("10.0.0.0/8"))
+    }
+
+    func test_parseCIDROrBareIP_rejectsJunk() {
+        XCTAssertNil(AllowedIPsBuilder.parseCIDROrBareIP("not an ip"))
+        XCTAssertNil(AllowedIPsBuilder.parseCIDROrBareIP("1.2.3"))
+        XCTAssertNil(AllowedIPsBuilder.parseCIDROrBareIP("1.2.3.400"))
+    }
+
+    func test_parseListLines_mixedBareAndCIDRWithComments() {
+        let text = """
+        10.0.0.0/8
+        8.8.8.8
+        # комментарий
+        1.2.3.4 # инлайн-комментарий
+
+        не-адрес
+        """
+        let ranges = AllowedIPsBuilder.parseListLines(text)
+        XCTAssertEqual(ranges.count, 3)
+    }
+
     // MARK: – range
 
     func test_range_prefix0_isWhole() {

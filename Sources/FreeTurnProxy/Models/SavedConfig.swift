@@ -33,12 +33,16 @@ struct SavedConfig: Identifiable, Codable, Equatable {
     // true: новым профилям сразу предлагаем WG-in-WG, старый режим — опция.
     var useLocalTunnel: Bool = true
 
+    // Раздельное туннелирование — только для useLocalTunnel: в старом режиме
+    // маршрутизацией занимается AmneziaWG, а не наш роутер.
+    var splitTunnel = SplitTunnelConfig()
+
     init(id: UUID = UUID(), name: String, peer: String, obfKey: String = "", dns: String = "",
          listen: String = "", transport: String = "udp", manualCaptcha: Bool = false,
          obfProfile: String? = nil, obfTimingMs: Int = 0, mode: String = "udp", bond: Bool = false,
          threads: Int = 0, streamsPerCred: Int = 0, dnsMode: String = "auto", turnHost: String = "",
          turnPort: String = "", debug: Bool = false, clientId: String = "",
-         useLocalTunnel: Bool = true) {
+         useLocalTunnel: Bool = true, splitTunnel: SplitTunnelConfig = SplitTunnelConfig()) {
         self.id = id
         self.name = name
         self.peer = peer
@@ -61,12 +65,13 @@ struct SavedConfig: Identifiable, Codable, Equatable {
         self.debug = debug
         self.clientId = clientId
         self.useLocalTunnel = useLocalTunnel
+        self.splitTunnel = splitTunnel
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, peer, obfKey, dns, listen, transport, manualCaptcha,
              obfProfile, obfTimingMs, mode, bond, threads, streamsPerCred,
-             dnsMode, turnHost, turnPort, debug, clientId, useLocalTunnel
+             dnsMode, turnHost, turnPort, debug, clientId, useLocalTunnel, splitTunnel
     }
 
     // Записи, сохранённые до Этапа B, не знают про новые поля —
@@ -99,5 +104,6 @@ struct SavedConfig: Identifiable, Codable, Equatable {
         debug = try c.decodeIfPresent(Bool.self, forKey: .debug) ?? false
         clientId = try c.decodeIfPresent(String.self, forKey: .clientId) ?? ""
         useLocalTunnel = try c.decodeIfPresent(Bool.self, forKey: .useLocalTunnel) ?? true
+        splitTunnel = try c.decodeIfPresent(SplitTunnelConfig.self, forKey: .splitTunnel) ?? SplitTunnelConfig()
     }
 }
