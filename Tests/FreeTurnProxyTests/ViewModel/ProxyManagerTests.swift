@@ -296,6 +296,34 @@ final class ProxyManagerTests: XCTestCase {
         pm.stop()
     }
 
+    // У ядра свой watchdog, и оно умеет починиться само, пока мы отсиживаем
+    // бекофф. handleState(connected) закрывает эпизод, но запланированный
+    // work item живёт дальше — без гарда по inRetryCycle он срабатывал уже
+    // поверх здоровой сессии и ронял рабочий туннель на ровном месте.
+    func test_autoReconnect_pendingStep_doesNotFireAfterSelfRecovery() async throws {
+        let (pm, mock) = manager()
+        pm.loadConfig(sampleConfig(), fileName: "test.freeturn")
+        try pm.start()
+
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        pm.handleState("error", streams: 0, total: 1, errMsg: "boom")
+        XCTAssertEqual(pm.state, .retryBackoff)
+
+        // Ядро починилось само, не дожидаясь нашей ступени (бекофф ~1с).
+        pm.handleState("connected", streams: 1, total: 1, errMsg: "")
+        let restartsBefore = mock.restartCallCount
+        let wakesBefore = mock.wakeCallCount
+
+        try? await Task.sleep(for: .milliseconds(1800))
+
+        XCTAssertEqual(mock.wakeCallCount, wakesBefore,
+                       "протухшая ступень не должна будить здоровую сессию")
+        XCTAssertEqual(mock.restartCallCount, restartsBefore,
+                       "протухшая ступень не должна перезапускать здоровую сессию")
+        XCTAssertEqual(pm.state, .connected, "состояние не должно уехать в .connecting")
+        pm.stop()
+    }
+
     // MARK: – Смена сети (план, фаза 2.1/2.2/2.4)
 
     // Сокеты ядра привязаны IP_BOUND_IF к конкретному индексу интерфейса —

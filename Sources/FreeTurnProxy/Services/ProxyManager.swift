@@ -605,7 +605,14 @@ final class ProxyManager: ObservableObject {
     // (confirmCheapStepOutcome) — Go может неделями не прислать новый push,
     // если сам считает себя в порядке, а сломана только наша сторона.
     private func performRecoveryStep(_ step: RecoveryStep) {
-        guard isRunning, let config else { return }
+        // inRetryCycle обязателен, а не «на всякий случай»: handleState на
+        // connected закрывает эпизод, но запланированный work item не отменяет.
+        // Ядро умеет чиниться само (у него свой watchdog), и без этого гарда
+        // отложенная ступень срабатывала бы уже поверх здоровой сессии —
+        // restartMobile сносил бы рабочий туннель через N секунд после того,
+        // как всё восстановилось. Все легитимные входы идут через
+        // beginRetryCycleIfNeeded, так что флаг тут всегда взведён.
+        guard isRunning, inRetryCycle, let config else { return }
         backoffTickTimer?.invalidate()
         backoffTickTimer = nil
         retryBackoffSeconds = 0
