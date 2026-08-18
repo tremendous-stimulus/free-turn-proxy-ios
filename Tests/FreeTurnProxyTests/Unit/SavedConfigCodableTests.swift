@@ -25,8 +25,6 @@ final class SavedConfigCodableTests: XCTestCase {
 
     func test_decodeLegacyRecord_newFieldsGetDefaults() throws {
         let cfg = try JSONDecoder().decode(SavedConfig.self, from: legacyJSON(obfKey: ""))
-        XCTAssertEqual(cfg.mode, "udp")
-        XCTAssertFalse(cfg.bond)
         XCTAssertEqual(cfg.threads, 0)
         XCTAssertEqual(cfg.streamsPerCred, 0)
         XCTAssertEqual(cfg.dnsMode, "auto")

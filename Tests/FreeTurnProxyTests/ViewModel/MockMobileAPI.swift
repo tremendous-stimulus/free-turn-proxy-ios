@@ -8,6 +8,7 @@ final class MockMobileAPI: MobileAPI {
     var restartCallCount = 0
     var stopCalled = false
     var stopCallCount = 0
+    var wakeCallCount = 0
     var clearLogsCalled = false
     var eventSinkSet: MobileEventSinkProtocol?
     var protectorSet: MobileProtectorProtocol?
@@ -46,6 +47,10 @@ final class MockMobileAPI: MobileAPI {
     func stop() {
         stopCalled = true
         stopCallCount += 1
+    }
+
+    func wake() {
+        wakeCallCount += 1
     }
 
     func getState() -> MobileSnapshot? {

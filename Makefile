@@ -3,7 +3,7 @@
 # Переопределяемо для локальной разработки:
 #   make framework GO_REPO=/path/to/free-turn-proxy GO_REF=main
 GO_REPO ?= https://github.com/samosvalishe/free-turn-proxy
-GO_REF  ?= v2.1.1
+GO_REF  ?= v3.1.0
 SRC_DIR := .framework-src
 
 # Прямые зависимости нашей половины (golib/go.mod) в виде module@version —

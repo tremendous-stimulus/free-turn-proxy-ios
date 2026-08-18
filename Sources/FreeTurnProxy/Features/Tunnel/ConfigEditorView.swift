@@ -33,8 +33,6 @@ struct ConfigEditorView: View {
     @State private var obfTimingMsText: String
 
     @State private var transport: String
-    @State private var mode: String
-    @State private var bond: Bool
 
     @State private var threadsText: String
     @State private var streamsPerCredText: String
@@ -64,8 +62,6 @@ struct ConfigEditorView: View {
         _obfTimingMsText = State(initialValue: initial.map { $0.obfTimingMs == 0 ? "" : String($0.obfTimingMs) } ?? "")
 
         _transport = State(initialValue: initial?.transport ?? "udp")
-        _mode = State(initialValue: initial?.mode ?? "udp")
-        _bond = State(initialValue: initial?.bond ?? false)
 
         _threadsText = State(initialValue: initial.map { $0.threads == 0 ? "" : String($0.threads) } ?? "")
         _streamsPerCredText = State(initialValue: initial.map { $0.streamsPerCred == 0 ? "" : String($0.streamsPerCred) } ?? "")
@@ -144,8 +140,7 @@ struct ConfigEditorView: View {
         var name, peer: String
         var manualCaptcha: Bool
         var obfProfile, obfKey, obfTimingMsText: String
-        var transport, mode: String
-        var bond: Bool
+        var transport: String
         var threadsText, streamsPerCredText: String
         var dnsMode, dns: String
         var turnEndpoint, listen: String
@@ -155,7 +150,7 @@ struct ConfigEditorView: View {
     private var snapshot: Snapshot {
         Snapshot(name: name, peer: peer, manualCaptcha: manualCaptcha,
                  obfProfile: obfProfile, obfKey: obfKey, obfTimingMsText: obfTimingMsText,
-                 transport: transport, mode: mode, bond: bond,
+                 transport: transport,
                  threadsText: threadsText, streamsPerCredText: streamsPerCredText,
                  dnsMode: dnsMode, dns: dns,
                  turnEndpoint: turnEndpoint, listen: listen, debug: debug)
@@ -181,11 +176,9 @@ struct ConfigEditorView: View {
                          placeholder: "64 hex символа, если профиль не «Нет»", text: $obfKey,
                          keyboard: .asciiCapable, error: obfKeyError)
 
-            if mode == "udp" {
-                LabeledField(title: "Тайминг (мс)", icon: "timer",
-                             placeholder: "0 по умолчанию", text: $obfTimingMsText,
-                             keyboard: .numberPad, error: obfTimingMsError)
-            }
+            LabeledField(title: "Тайминг (мс)", icon: "timer",
+                         placeholder: "0 по умолчанию", text: $obfTimingMsText,
+                         keyboard: .numberPad, error: obfTimingMsError)
         }
     }
 
@@ -202,27 +195,6 @@ struct ConfigEditorView: View {
                     Text("TCP").tag("tcp")
                 }
                 .pickerStyle(.segmented)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Label("Режим прокси", systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                Picker("Режим", selection: $mode) {
-                    Text("WireGuard (UDP)").tag("udp")
-                    Text("Xray (TCP)").tag("tcp")
-                }
-                .pickerStyle(.segmented)
-            }
-
-            if mode == "tcp" {
-                Toggle(isOn: $bond) {
-                    Label("Bond", systemImage: "link.circle")
-                        .font(.caption.bold())
-                        .foregroundStyle(.secondary)
-                }
-                .tint(.green)
-                .padding(.trailing, 2)
             }
 
             Toggle(isOn: $manualCaptcha) {
@@ -383,7 +355,6 @@ struct ConfigEditorView: View {
             dns: trimDns, listen: trimListen,
             transport: transport, manualCaptcha: manualCaptcha,
             obfProfile: obfProfile, obfTimingMs: Int(obfTimingMsText) ?? 0,
-            mode: mode, bond: bond,
             threads: Int(threadsText) ?? 0, streamsPerCred: Int(streamsPerCredText) ?? 0,
             dnsMode: dnsMode, turnHost: turnHostPort?.host ?? "", turnPort: turnHostPort?.port ?? "",
             debug: debug, clientId: clientId

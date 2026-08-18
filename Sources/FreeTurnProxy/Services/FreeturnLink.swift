@@ -37,6 +37,10 @@ enum FreeturnLink {
         var provider: String
         var peer: String
         var transport: String = ""
+        // mode/bond — поля proxy.mode/proxy.bond, выпиленные апстримом в v3.0.0
+        // (режим Xray/TCP-прокси убран целиком). Продолжаем принимать их из
+        // старых ссылок/файлов ради обратной совместимости декодера, но
+        // больше никуда не прокидываем и не эмитим.
         var mode: String = ""
         var bond: Bool = false
         var obf: String = ""
@@ -129,8 +133,6 @@ enum FreeturnLink {
             transport: w.transport.isEmpty ? "udp" : w.transport,
             manualCaptcha: w.mcap,
             obfProfile: w.obf.isEmpty ? "none" : w.obf,
-            mode: w.mode.isEmpty ? "udp" : w.mode,
-            bond: w.bond,
             threads: w.n,
             streamsPerCred: w.spc,
             dnsMode: w.dns.isEmpty ? "auto" : w.dns,
@@ -148,8 +150,6 @@ enum FreeturnLink {
             provider: provider,
             peer: c.peer,
             transport: c.transport,
-            mode: c.mode,
-            bond: c.bond,
             obf: c.obfProfile == "none" ? "" : c.obfProfile,
             key: c.obfProfile == "none" ? "" : c.obfKey,
             n: c.threads,

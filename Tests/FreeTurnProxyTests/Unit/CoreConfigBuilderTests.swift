@@ -34,16 +34,6 @@ final class CoreConfigBuilderTests: XCTestCase {
         XCTAssertEqual(cc.obf.timingMs, 42)
     }
 
-    func test_build_mapsProxyModeAndBond() {
-        let c = base {
-            $0.mode = "tcp"
-            $0.bond = true
-        }
-        let cc = CoreConfigBuilder.build(config: c, links: [])
-        XCTAssertEqual(cc.proxy.mode, "tcp")
-        XCTAssertTrue(cc.proxy.bond)
-    }
-
     func test_build_zeroThreadsAndStreamsPerCred_keepCoreDefaults() {
         let c = base()
         let cc = CoreConfigBuilder.build(config: c, links: [])

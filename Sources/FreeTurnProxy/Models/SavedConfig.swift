@@ -15,9 +15,7 @@ struct SavedConfig: Identifiable, Codable, Equatable {
     var manualCaptcha: Bool = false
 
     var obfProfile: String = "none"        // none | rtpopus | rtpopus2 | rtpopus3
-    var obfTimingMs: Int = 0               // -obf-timing, значим только при mode == "udp"
-    var mode: String = "udp"               // proxy.mode: udp (WireGuard) | tcp (Xray)
-    var bond: Bool = false                 // значим только при mode == "tcp"
+    var obfTimingMs: Int = 0               // -obf-timing
     var threads: Int = 0                   // -n, 0 = дефолт ядра
     var streamsPerCred: Int = 0            // 0 = дефолт ядра
     var dnsMode: String = "auto"           // auto | plain | doh
@@ -40,7 +38,7 @@ struct SavedConfig: Identifiable, Codable, Equatable {
 
     init(id: UUID = UUID(), name: String, peer: String, obfKey: String = "", dns: String = "",
          listen: String = "", transport: String = "udp", manualCaptcha: Bool = false,
-         obfProfile: String? = nil, obfTimingMs: Int = 0, mode: String = "udp", bond: Bool = false,
+         obfProfile: String? = nil, obfTimingMs: Int = 0,
          threads: Int = 0, streamsPerCred: Int = 0, dnsMode: String = "auto", turnHost: String = "",
          turnPort: String = "", debug: Bool = false, clientId: String = "",
          useLocalTunnel: Bool = true, splitTunnel: SplitTunnelConfig = SplitTunnelConfig()) {
@@ -56,8 +54,6 @@ struct SavedConfig: Identifiable, Codable, Equatable {
         // непустой ключ подразумевал rtpopus.
         self.obfProfile = obfProfile ?? (obfKey.isEmpty ? "none" : "rtpopus")
         self.obfTimingMs = obfTimingMs
-        self.mode = mode
-        self.bond = bond
         self.threads = threads
         self.streamsPerCred = streamsPerCred
         self.dnsMode = dnsMode
@@ -71,7 +67,7 @@ struct SavedConfig: Identifiable, Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, peer, obfKey, dns, listen, transport, manualCaptcha,
-             obfProfile, obfTimingMs, mode, bond, threads, streamsPerCred,
+             obfProfile, obfTimingMs, threads, streamsPerCred,
              dnsMode, turnHost, turnPort, debug, clientId, useLocalTunnel, splitTunnel
     }
 
@@ -95,8 +91,6 @@ struct SavedConfig: Identifiable, Codable, Equatable {
             obfProfile = obfKey.isEmpty ? "none" : "rtpopus"
         }
         obfTimingMs = try c.decodeIfPresent(Int.self, forKey: .obfTimingMs) ?? 0
-        mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "udp"
-        bond = try c.decodeIfPresent(Bool.self, forKey: .bond) ?? false
         threads = try c.decodeIfPresent(Int.self, forKey: .threads) ?? 0
         streamsPerCred = try c.decodeIfPresent(Int.self, forKey: .streamsPerCred) ?? 0
         dnsMode = try c.decodeIfPresent(String.self, forKey: .dnsMode) ?? "auto"

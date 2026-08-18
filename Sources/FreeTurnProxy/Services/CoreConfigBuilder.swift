@@ -16,8 +16,6 @@ enum CoreConfigBuilder {
         if !c.turnPort.isEmpty { cc.turn.port = c.turnPort }
         if c.threads > 0 { cc.turn.n = c.threads }
 
-        cc.proxy.mode = c.mode
-        cc.proxy.bond = c.bond
         if !c.listen.isEmpty { cc.proxy.listen = c.listen }
 
         cc.vk.links = links
