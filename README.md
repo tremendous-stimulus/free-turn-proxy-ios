@@ -1,49 +1,38 @@
 # Free Turn (iOS)
 
-iOS-клиент [free-turn-proxy](https://github.com/tremendous-stimulus/free-turn-proxy): поднимает на устройстве локальный прокси, через который AmneziaWG/WireGuard тоннелируется в TURN-серверы VK под видом медиатрафика видеозвонка. SwiftUI, iOS 16+.
+iOS-клиент [free-turn-proxy](https://github.com/tremendous-stimulus/free-turn-proxy): поднимает на устройстве локальный прокси, через который AmneziaWG/WireGuard тоннелируется в TURN-серверы VK под видом медиатрафика видеозвонка. SwiftUI, iOS 16+. 
+
 
 ## Установка через SideStore
 
-1. Установи [SideStore](https://sidestore.io) на устройство.
-2. В SideStore открой **Sources → +** и вставь ссылку на источник:
+1. Установите [SideStore](https://sidestore.io) на устройство.
+2. Включите LocalDevVPN
+3. В SideStore откройте **Sources → +** и вставьте ссылку на источник:
 
    ```
    https://raw.githubusercontent.com/tremendous-stimulus/free-turn-proxy-ios/main/apps.json
    ```
 
-3. Открой источник «Free Turn» и нажми **Install** у приложения.
+4. Откройте источник «Free Turn» и нажмите кнопку **Install**.
+5. Приложение автоматически отслеживает новые релизы, для обновления включите LocalDevVPN, откройте SideStore (вкладка **My Apps**) и нажмите кнопку **Update**.
 
-Каждый новый git-тег вида `1.0.0` автоматически собирает `.ipa`, публикует GitHub Release и обновляет источник — SideStore подтянет обновление.
+## Установка через TestFlight
 
-## Требования
+На данный момент не поддерживается. Следите за обновлениями.
 
-- Xcode 15+
-- [xcodegen](https://github.com/yonaskolb/XcodeGen) — `brew install xcodegen`
-- [gomobile](https://pkg.go.dev/golang.org/x/mobile/cmd/gomobile) — `go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init`
+## Поддержать проект
 
-## Сборка
-
-```sh
-make all        # framework + project + open
-```
-
-Или по шагам:
-
-```sh
-make framework  # собрать Ios.xcframework (клонирует Go-репо и гонит gomobile bind)
-make project    # сгенерировать FreeTurnProxy.xcodeproj из project.yml
-make open       # открыть проект в Xcode
-make clean      # удалить артефакты сборки
-```
-
-`make framework` тянет Go-исходники из git, поэтому собирает то, что **запушено**. Источник переопределяется:
-
-```sh
-make framework GO_REPO=/путь/к/free-turn-proxy GO_REF=моя-ветка
-```
-
-Распространяется сайдлоадом (SideStore): подпись и `DEVELOPMENT_TEAM` заданы в `project.yml`.
+Free Turn - некоммерческий проект без рекламы и встроенных транзакций. Поддержите разработку - любая сумма поможет выпускать регулярные обновления.
+- [Tribute](https://web.tribute.tg/d/OYv)
+- USDT (TRC20): `TYYYNwFYVWrhFymDDvJJYqig48mEoPJWJs`
+- TON: `UQAyHqBriXEe7VHGNGM1m0MEF6oy5PDCQbqh0m6C6JB5jZXf`
+- BTC: `bc1qzl8ww367s6ytqpfmpetzfm2z09402a03j6840j`
+- ETH: `0x253a044D19cd60cCb7DF7A8B3B2cB9d43012d08f`
 
 ## Контрибьют
 
-Pull request'ы приветствуются — багфиксы, улучшения, идеи. Перед PR убедись, что проект собирается (`make all`). Issue с воспроизведением тоже welcome.
+Pull request'ы приветствуются — багфиксы, улучшения, идеи. Строгих гайдлайнов нет, достаточно убедиться, что CI-проверки в PR зелёные.
+
+## Остались вопросы?
+
+Пишите в [Telegram](https://t.me/freeturnproxy_ios_help_bot)
