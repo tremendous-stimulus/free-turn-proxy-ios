@@ -6,6 +6,10 @@ GO_REPO ?= https://github.com/samosvalishe/free-turn-proxy
 GO_REF  ?= v2.1.1
 SRC_DIR := .framework-src
 
+# Прямые зависимости нашей половины (golib/go.mod) в виде module@version —
+# ими пинится сборка внутри клона апстрима, см. framework.
+FTUN_DEPS := $(shell awk '/^require \(/{f=1;next} /^\)/{f=0} f && $$0 !~ /indirect/ && NF==2 {print $$1 "@" $$2}' golib/go.mod)
+
 .PHONY: framework project open clean all
 
 # 1. Собрать Go-фреймворк: апстрим (mobile) + наш WG-in-WG модуль (golib/ftun,
@@ -25,6 +29,11 @@ framework:
 	rm -rf $(SRC_DIR)/ftun
 	cp -R golib/ftun $(SRC_DIR)/ftun
 	rm -f $(SRC_DIR)/ftun/*_test.go
+	# Версии зависимостей ftun приезжают из golib/go.mod. Без этого шага
+	# `go mod tidy` в клоне апстрима резолвит gvisor в «самое свежее» на момент
+	# сборки — а у него неотегованный API ломается регулярно, то есть релиз мог
+	# бы упасть или слинковаться с другим netstack без единой правки в репе.
+	cd $(SRC_DIR) && go get $(FTUN_DEPS)
 	cd $(SRC_DIR) && go get -tool golang.org/x/mobile/cmd/gobind && go mod tidy
 	cd $(SRC_DIR) && gomobile bind -target ios,iossimulator -ldflags "-checklinkname=0" \
 		-o dist/Mobile.xcframework ./mobile ./ftun

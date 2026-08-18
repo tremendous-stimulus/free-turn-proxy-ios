@@ -46,6 +46,14 @@ type bypassStack struct {
 	wg     sync.WaitGroup
 	once   sync.Once
 
+	// Живые релеи. io.Copy внутри relay не разблокируется ни отменой
+	// контекста, ни закрытием link-endpoint'а — только реальным закрытием
+	// сокета, поэтому Close() обязан знать про каждое соединение, иначе один
+	// idle-коннект вешает wg.Wait() навсегда.
+	mu     sync.Mutex
+	conns  map[net.Conn]struct{}
+	closed bool
+
 	dialer net.Dialer
 	logf   func(format string, args ...any)
 }
@@ -68,6 +76,7 @@ func newBypassStack(mtu int, logf func(format string, args ...any)) (*bypassStac
 		outbound: make(chan []byte, 256),
 		ctx:      ctx,
 		cancel:   cancel,
+		conns:    make(map[net.Conn]struct{}),
 		dialer:   net.Dialer{Control: protectControl, Timeout: dialTimeout},
 		logf:     logf,
 	}
@@ -142,9 +151,53 @@ func (b *bypassStack) readLoop() {
 	}
 }
 
+// addConns регистрирует пару соединений релея. false — стек уже закрывается,
+// соединения закрыты здесь же, вызывающий должен просто выйти.
+func (b *bypassStack) addConns(cs ...net.Conn) bool {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		for _, c := range cs {
+			c.Close()
+		}
+		return false
+	}
+	for _, c := range cs {
+		b.conns[c] = struct{}{}
+	}
+	b.mu.Unlock()
+	return true
+}
+
+func (b *bypassStack) removeConns(cs ...net.Conn) {
+	b.mu.Lock()
+	for _, c := range cs {
+		delete(b.conns, c)
+	}
+	b.mu.Unlock()
+}
+
+func (b *bypassStack) closeConns() {
+	b.mu.Lock()
+	b.closed = true
+	live := make([]net.Conn, 0, len(b.conns))
+	for c := range b.conns {
+		live = append(live, c)
+	}
+	b.conns = nil
+	b.mu.Unlock()
+	for _, c := range live {
+		c.Close()
+	}
+}
+
 func (b *bypassStack) Close() {
 	b.once.Do(func() {
 		b.cancel()
+		// Соединения рвём до wg.Wait(): иначе релей-горутины висят в io.Copy
+		// на живом сокете и Close() не возвращается никогда — а зовут его с
+		// главного потока (ProxyManager.stop → ftun.Stop).
+		b.closeConns()
 		b.ep.Close()
 		b.wg.Wait()
 		b.stack.Close()
@@ -179,7 +232,12 @@ func (b *bypassStack) handleTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 		r.Complete(false)
-		relay(gonet.NewTCPConn(&wq, ep), remote)
+		local := gonet.NewTCPConn(&wq, ep)
+		if !b.addConns(local, remote) {
+			return
+		}
+		defer b.removeConns(local, remote)
+		relay(local, remote)
 	}()
 }
 
@@ -204,6 +262,10 @@ func (b *bypassStack) handleUDP(r *udp.ForwarderRequest) {
 			local.Close()
 			return
 		}
+		if !b.addConns(local, remote) {
+			return
+		}
+		defer b.removeConns(local, remote)
 		relayUDP(local, remote)
 	}()
 }

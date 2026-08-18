@@ -46,10 +46,13 @@ func (r *router) start() {
 func (r *router) close() {
 	r.once.Do(func() {
 		close(r.closeCh)
+		// Сначала дожидаемся помп, только потом рвём стек: pumpFromLocal может
+		// быть между routesBypass() и stack.Inject(), а Inject в уже закрытый
+		// gvisor-стек — use-after-close.
+		r.wg.Wait()
 		if r.stack != nil {
 			r.stack.Close()
 		}
-		r.wg.Wait()
 	})
 }
 
