@@ -56,8 +56,12 @@ func (r *router) close() {
 	})
 }
 
-// Единственное место, где принимается решение о маршруте.
-func (r *router) routesBypass(pkt []byte) bool {
+// Единственное место, где принимается решение о маршруте. Кэш приходит
+// параметром, а не лежит в router: так он остаётся собственностью одной
+// горутины по области видимости, а не по договорённости (см. routeCache).
+// Проверка кэша идёт ПОСЛЕ nil-guard'а: у роутера из NewPipe bypass == nil,
+// и до кэша дело не доходит вовсе.
+func (r *router) routesBypass(cache *routeCache, pkt []byte) bool {
 	if r.stack == nil || r.bypass == nil {
 		return false
 	}
@@ -65,18 +69,25 @@ func (r *router) routesBypass(pkt []byte) bool {
 	if !ok {
 		return false
 	}
-	return r.bypass.Contains(dst)
+	if v, hit := cache.get(dst); hit {
+		return v
+	}
+	v := r.bypass.Contains(dst)
+	cache.put(dst, v)
+	return v
 }
 
 func (r *router) pumpFromLocal() {
 	defer r.wg.Done()
+	// Владелец кэша — только эта горутина: дотянуться до него извне нельзя.
+	cache := newRouteCache()
 	for {
 		select {
 		case pkt, ok := <-r.local.outbound:
 			if !ok {
 				return
 			}
-			if r.routesBypass(pkt) {
+			if r.routesBypass(cache, pkt) {
 				r.stack.Inject(pkt)
 				continue
 			}

@@ -97,7 +97,7 @@ func TestRouter_WithoutStack_NeverBypasses(t *testing.T) {
 	pkt := make([]byte, 20)
 	pkt[0] = 0x45
 	copy(pkt[16:20], []byte{192, 168, 1, 7})
-	if r.routesBypass(pkt) {
+	if r.routesBypass(newRouteCache(), pkt) {
 		t.Error("без стека обхода маршрутизация невозможна")
 	}
 }

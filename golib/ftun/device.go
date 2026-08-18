@@ -136,7 +136,7 @@ func newSession(cfg StartConfig, logger *device.Logger) (*session, error) {
 	// висеть не должен.
 	bypass := NewBypassSet(cfg.BypassCIDRs, cfg.BypassExcludeCIDRs)
 	var stk *bypassStack
-	if bypass.Len() > 0 {
+	if !bypass.IsEmpty() {
 		var err error
 		stk, err = newBypassStack(cfg.MTU, func(format string, args ...any) {
 			logger.Verbosef(format, args...)
