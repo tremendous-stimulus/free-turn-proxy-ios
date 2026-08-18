@@ -130,8 +130,15 @@ func (h *half) stats() (up bool, handshakeAgeSec int64, txBytes, rxBytes int64, 
 	return parseIpcStats(raw)
 }
 
-// parseIpcStats достаёт только то, что нужно Stats() (api.go): само наличие
-// секции пира уже значит, что девайс поднят; свежий handshake — что он жив.
+// parseIpcStats достаёт только то, что нужно Stats() (api.go).
+//
+// up половины — это «пир жив», а не «пир сконфигурирован». Раньше флаг
+// взводился по наличию строки public_key, то есть у работающего девайса был
+// константой true: переход up→down не мог случиться никогда, и потребители
+// (логи цепочки и пропуск зонда в ProxyManager) молча получали бесполезный
+// сигнал. Живой признак один — свежесть хендшейка: по RejectAfterTime
+// (device/constants.go, 180с) keypair перестаёт годиться, и всё, что старше,
+// живым считать нельзя. handshakeSec == 0 — хендшейка не было ни разу.
 func parseIpcStats(raw string) (up bool, handshakeAgeSec int64, txBytes, rxBytes int64, err error) {
 	var handshakeSec int64
 	for _, line := range strings.Split(raw, "\n") {
@@ -140,8 +147,6 @@ func parseIpcStats(raw string) (up bool, handshakeAgeSec int64, txBytes, rxBytes
 			continue
 		}
 		switch key {
-		case "public_key":
-			up = true
 		case "last_handshake_time_sec":
 			handshakeSec, err = strconv.ParseInt(value, 10, 64)
 			if err != nil {
@@ -162,9 +167,11 @@ func parseIpcStats(raw string) (up bool, handshakeAgeSec int64, txBytes, rxBytes
 		}
 	}
 	if handshakeSec == 0 {
-		return up, 0, txBytes, rxBytes, nil
+		return false, 0, txBytes, rxBytes, nil
 	}
-	return up, time.Now().Unix() - handshakeSec, txBytes, rxBytes, nil
+	age := time.Now().Unix() - handshakeSec
+	up = age >= 0 && age < int64(device.RejectAfterTime.Seconds())
+	return up, age, txBytes, rxBytes, nil
 }
 
 // session — обе половины дороги плюс труба между ними (pipe.go). Владеет

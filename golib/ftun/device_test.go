@@ -415,3 +415,42 @@ func TestNewSession_LocalHalfSilentUntilClientConnects(t *testing.T) {
 		}
 	}
 }
+
+// TestParseIpcStats_UpMeansAliveNotConfigured — up обязан отражать живость
+// пира, а не факт его наличия в конфиге: на этом флаге стоят логи цепочки и
+// пропуск зонда в ProxyManager, и константа true делала оба бесполезными.
+func TestParseIpcStats_UpMeansAliveNotConfigured(t *testing.T) {
+	const peerLine = "public_key=0000000000000000000000000000000000000000000000000000000000000000\n"
+
+	t.Run("хендшейка не было — не живой", func(t *testing.T) {
+		up, age, _, _, err := parseIpcStats(peerLine + "last_handshake_time_sec=0\n")
+		if err != nil {
+			t.Fatalf("parseIpcStats: %v", err)
+		}
+		if up || age != 0 {
+			t.Fatalf("ожидали up=false age=0, получили up=%v age=%d", up, age)
+		}
+	})
+
+	t.Run("свежий хендшейк — живой", func(t *testing.T) {
+		raw := fmt.Sprintf(peerLine+"last_handshake_time_sec=%d\n", time.Now().Unix()-5)
+		up, age, _, _, err := parseIpcStats(raw)
+		if err != nil {
+			t.Fatalf("parseIpcStats: %v", err)
+		}
+		if !up || age < 4 || age > 7 {
+			t.Fatalf("ожидали up=true age≈5, получили up=%v age=%d", up, age)
+		}
+	})
+
+	t.Run("хендшейк старше RejectAfterTime — не живой", func(t *testing.T) {
+		raw := fmt.Sprintf(peerLine+"last_handshake_time_sec=%d\n", time.Now().Unix()-200)
+		up, age, _, _, err := parseIpcStats(raw)
+		if err != nil {
+			t.Fatalf("parseIpcStats: %v", err)
+		}
+		if up {
+			t.Fatalf("хендшейк %dс назад не может считаться живым", age)
+		}
+	})
+}
